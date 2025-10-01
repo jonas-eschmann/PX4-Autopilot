@@ -5,8 +5,8 @@ endif()
 include(px4_add_library)
 
 px4_add_module(
-	MODULE modules__rl_tools_policy
-	MAIN rl_tools_policy
+	MODULE modules__mc_raptor
+	MAIN mc_raptor
 	STACK_MAIN 2000
 	COMPILE_FLAGS
 		-DARM_MATH_LOOPUNROLL
@@ -18,14 +18,14 @@ px4_add_module(
 	EXTERNAL
 	)
 target_include_directories(
-	modules__rl_tools_policy
+	modules__mc_raptor
 	PRIVATE
 	${RL_TOOLS_ROOT}/include
 	${RL_TOOLS_ROOT}/data
 )
 
-target_compile_features(modules__rl_tools_policy PRIVATE cxx_std_17)
-target_compile_options(modules__rl_tools_policy PRIVATE -Wno-error -DARM_MATH_LOOPUNROLL)
+target_compile_features(modules__mc_raptor PRIVATE cxx_std_17)
+target_compile_options(modules__mc_raptor PRIVATE -Wno-error -DARM_MATH_LOOPUNROLL)
 
 
 
