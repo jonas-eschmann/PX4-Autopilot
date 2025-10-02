@@ -1,24 +1,25 @@
-#include "RLtoolsPolicy.hpp"
+#include "mc_raptor.hpp"
 #undef OK
 
-RLtoolsPolicy::RLtoolsPolicy(): ModuleParams(nullptr), ScheduledWorkItem(MODULE_NAME, px4::wq_configurations::rate_ctrl){
+Raptor::Raptor(): ModuleParams(nullptr), ScheduledWorkItem(MODULE_NAME, px4::wq_configurations::rate_ctrl){
 	// node state
 	timestamp_last_angular_velocity_set = false;
 	timestamp_last_local_position_set = false;
 	timestamp_last_attitude_set = false;
-	timestamp_last_command_set = false;
-	previous_command_stale = false;
+	timestamp_last_trajectory_setpoint_set = false;
+	previous_trajectory_setpoint_stale = false;
 	previous_active = false;
 	timeout_message_sent = false;
 	timestamp_last_policy_frequency_check_set = false;
 	last_intermediate_status_set = false;
 	last_native_status_set = false;
 	policy_frequency_check_counter = 0;
+	flightmode_registered = false;
 
-	_actuator_motors_rl_tools_pub.advertise();
+	_actuator_motors_pub.advertise();
 	_tune_control_pub.advertise();
 }
-void RLtoolsPolicy::reset(){
+void Raptor::reset(){
 	this->visual_odometry_stale_counter = 0;
 	this->timestamp_last_visual_odometry_stale_set = false;
 	for(int action_i=0; action_i < RL_TOOLS_INTERFACE_APPLICATIONS_L2F_ACTION_DIM; action_i++){
@@ -27,13 +28,13 @@ void RLtoolsPolicy::reset(){
 	rl_tools_inference_applications_l2f_reset();
 }
 
-RLtoolsPolicy::~RLtoolsPolicy()
+Raptor::~Raptor()
 {
 	perf_free(_loop_perf);
 	perf_free(_loop_interval_perf);
 }
 
-bool RLtoolsPolicy::init()
+bool Raptor::init()
 {
 	this->init_time = hrt_absolute_time();
 	// ScheduleOnInterval(500_us); // 2000 us interval, 200 Hz rate
@@ -53,6 +54,9 @@ bool RLtoolsPolicy::init()
 		PX4_ERR("vehicle_attitude_sub callback registration failed");
 		return false;
 	}
+
+
+
 	PX4_INFO("Checkpoint: %s", rl_tools_inference_applications_l2f_checkpoint_name());
 
 	RLtoolsInferenceApplicationsL2FAction action;
@@ -71,6 +75,17 @@ bool RLtoolsPolicy::init()
 	else{
 		PX4_INFO("Checkpoint test passed with diff %.10f", abs_diff);
 	}
+
+	register_ext_component_request_s register_ext_component_request{};
+	register_ext_component_request.timestamp = hrt_absolute_time();
+	strncpy(register_ext_component_request.name, "RAPTOR", sizeof(register_ext_component_request.name) - 1);
+	register_ext_component_request.request_id = Raptor::EXT_COMPONENT_REQUEST_ID;
+	register_ext_component_request.px4_ros2_api_version = 1;
+	register_ext_component_request.register_arming_check = true;
+	register_ext_component_request.register_mode = true;
+	_register_ext_component_request_pub.publish(register_ext_component_request);
+
+
 	return healthy;
 }
 template <typename T>
@@ -156,7 +171,7 @@ void rotate_vector(T R[9], T v[3], T v_rotated[3]){
 	v_rotated[2] = R[6] * v[0] + R[7] * v[1] + R[8] * v[2];
 }
 
-void RLtoolsPolicy::observe(RLtoolsInferenceApplicationsL2FObservation& observation, TestObservationMode mode){
+void Raptor::observe(RLtoolsInferenceApplicationsL2FObservation& observation, TestObservationMode mode){
 	// converting from FRD to FLU
 	T qd[4] = {1, 0, 0, 0}, Rt_inv[9];
 	if(mode >= TestObservationMode::ORIENTATION){
@@ -169,11 +184,17 @@ void RLtoolsPolicy::observe(RLtoolsInferenceApplicationsL2FObservation& observat
 		// diff = q2 - FRD2FLU * q * transpose(FRD2FLU)
 		// @assert sum(abs.(diff)) < 1e-10
 
+		T q_target[4];
+		q_target[0] = cos(-0.5 * _trajectory_setpoint.yaw); // minus because the setpoint yaw is in NED
+		q_target[1] = 0;
+		q_target[2] = 0;
+		q_target[3] = sin(-0.5 * _trajectory_setpoint.yaw);
+
 		T qt[4], qtc[4], qr[4];
-		qt[0] = +_rl_tools_command.target_orientation[0]; // conjugate to build the difference between setpoint and current
-		qt[1] = +_rl_tools_command.target_orientation[1];
-		qt[2] = -_rl_tools_command.target_orientation[2];
-		qt[3] = -_rl_tools_command.target_orientation[3];
+		qt[0] = +q_target[0]; // conjugate to build the difference between setpoint and current
+		qt[1] = +q_target[1];
+		qt[2] = -q_target[2];
+		qt[3] = -q_target[3];
 		quaternion_conjugate(qt, qtc);
 		quaternion_to_rotation_matrix(qtc, Rt_inv);
 
@@ -198,9 +219,9 @@ void RLtoolsPolicy::observe(RLtoolsInferenceApplicationsL2FObservation& observat
 	}
 	if(mode >= TestObservationMode::POSITION){
 		T p[3], pt[3]; // FLU
-		p[0] = +(position[0] - _rl_tools_command.target_position[0]);
-		p[1] = -(position[1] - _rl_tools_command.target_position[1]);
-		p[2] = -(position[2] - _rl_tools_command.target_position[2]);
+		p[0] = +(position[0] - _trajectory_setpoint.position[0]);
+		p[1] = -(position[1] - _trajectory_setpoint.position[1]);
+		p[2] = -(position[2] - _trajectory_setpoint.position[2]);
 		rotate_vector(Rt_inv, p, pt); // The position and velocity error are in the target frame
 		observation.position[0] = clip(pt[0], max_position_error, -max_position_error);
 		observation.position[1] = clip(pt[1], max_position_error, -max_position_error);
@@ -213,9 +234,9 @@ void RLtoolsPolicy::observe(RLtoolsInferenceApplicationsL2FObservation& observat
 	}
 	if(mode >= TestObservationMode::LINEAR_VELOCITY){
 		T v[3], vt[3];
-		v[0] = +(linear_velocity[0] - _rl_tools_command.target_linear_velocity[0]);
-		v[1] = -(linear_velocity[1] - _rl_tools_command.target_linear_velocity[1]);
-		v[2] = -(linear_velocity[2] - _rl_tools_command.target_linear_velocity[2]);
+		v[0] = +(linear_velocity[0] - _trajectory_setpoint.velocity[0]);
+		v[1] = -(linear_velocity[1] - _trajectory_setpoint.velocity[1]);
+		v[2] = -(linear_velocity[2] - _trajectory_setpoint.velocity[2]);
 		rotate_vector(Rt_inv, v, vt);
 		observation.linear_velocity[0] = clip(vt[0], max_velocity_error, -max_velocity_error);
 		observation.linear_velocity[1] = clip(vt[1], max_velocity_error, -max_velocity_error);
@@ -241,25 +262,44 @@ void RLtoolsPolicy::observe(RLtoolsInferenceApplicationsL2FObservation& observat
 	}
 }
 
-void RLtoolsPolicy::Run()
+void Raptor::Run()
 {
 	if (should_exit()) {
+		_vehicle_local_position_sub.unregisterCallback();
+		_vehicle_visual_odometry_sub.unregisterCallback();
 		_vehicle_angular_velocity_sub.unregisterCallback();
 		_vehicle_attitude_sub.unregisterCallback();
-		_vehicle_local_position_sub.unregisterCallback();
+		if(flightmode_registered){
+			unregister_ext_component_s unregister_ext_component{};
+			unregister_ext_component.timestamp = hrt_absolute_time();
+			strncpy(unregister_ext_component.name, "RAPTOR", sizeof(unregister_ext_component.name) - 1);
+			unregister_ext_component.arming_check_id = ext_component_arming_check_id;
+			unregister_ext_component.mode_id = ext_component_mode_id;
+			_unregister_ext_component_pub.publish(unregister_ext_component);
+		}
 		ScheduleClear();
 		exit_and_cleanup();
 		return;
 	}
+	register_ext_component_reply_s register_ext_component_reply;
+	if(_register_ext_component_reply_sub.update(&register_ext_component_reply)) {
+		if (register_ext_component_reply.request_id == Raptor::EXT_COMPONENT_REQUEST_ID && register_ext_component_reply.success) {
+			ext_component_arming_check_id = register_ext_component_reply.arming_check_id;
+			ext_component_mode_id = register_ext_component_reply.mode_id;
+			flightmode_registered = true;
+			PX4_INFO("Raptor mode registration successful, arming_check_id: %d, mode_id: %d", ext_component_arming_check_id, ext_component_mode_id);
+		}
+	}
+
 	perf_count(_loop_interval_perf);
 
 	perf_begin(_loop_perf);
 	hrt_abstime current_time = hrt_absolute_time();
 
-	rl_tools_policy_status_s status;
+	raptor_status_s status;
 	status.timestamp = current_time;
 	status.timestamp_sample = current_time;
-	status.exit_reason = rl_tools_policy_status_s::EXIT_REASON_NONE;
+	status.exit_reason = raptor_status_s::EXIT_REASON_NONE;
 	status.substep = 0;
 	status.active = false;
 	status.control_interval = NAN;
@@ -267,19 +307,19 @@ void RLtoolsPolicy::Run()
 	status.visual_odometry_age = 0;
 	status.visual_odometry_dt_mean = 0;
 	status.visual_odometry_dt_std = 0;
-	for(TI odometry_dt_i = 0; odometry_dt_i < rl_tools_policy_status_s::NUM_VISUAL_ODOMETRY_DT_MAX; odometry_dt_i++){
+	for(TI odometry_dt_i = 0; odometry_dt_i < raptor_status_s::NUM_VISUAL_ODOMETRY_DT_MAX; odometry_dt_i++){
 		status.visual_odometry_dt_max[odometry_dt_i] = 0;
 	}
 
-	if(RLtoolsPolicy::ODOMETRY_SOURCE == RLtoolsPolicy::OdometrySource::LOCAL_POSITION){
-		status.odometry_source = rl_tools_policy_status_s::ODOMETRY_SOURCE_LOCAL_POSITION;
+	if(Raptor::ODOMETRY_SOURCE == Raptor::OdometrySource::LOCAL_POSITION){
+		status.odometry_source = raptor_status_s::ODOMETRY_SOURCE_LOCAL_POSITION;
 	}
 	else{
-		if(RLtoolsPolicy::ODOMETRY_SOURCE == RLtoolsPolicy::OdometrySource::VISUAL_ODOMETRY){
-			status.odometry_source = rl_tools_policy_status_s::ODOMETRY_SOURCE_VISUAL_ODOMETRY;
+		if(Raptor::ODOMETRY_SOURCE == Raptor::OdometrySource::VISUAL_ODOMETRY){
+			status.odometry_source = raptor_status_s::ODOMETRY_SOURCE_VISUAL_ODOMETRY;
 		}
 		else{
-			status.odometry_source = rl_tools_policy_status_s::ODOMETRY_SOURCE_UNKNOWN;
+			status.odometry_source = raptor_status_s::ODOMETRY_SOURCE_UNKNOWN;
 		}
 	}
 
@@ -311,7 +351,7 @@ void RLtoolsPolicy::Run()
 		status.visual_odometry_dt_std += value * value;
 		TI max_index = 0;
 		bool max_index_set = false;
-		for(TI odometry_dt_max_i = 0; odometry_dt_max_i < rl_tools_policy_status_s::NUM_VISUAL_ODOMETRY_DT_MAX; odometry_dt_max_i++){
+		for(TI odometry_dt_max_i = 0; odometry_dt_max_i < raptor_status_s::NUM_VISUAL_ODOMETRY_DT_MAX; odometry_dt_max_i++){
 			if(value > status.visual_odometry_dt_max[odometry_dt_max_i]){
 				max_index = odometry_dt_max_i;
 				max_index_set = true;
@@ -328,10 +368,21 @@ void RLtoolsPolicy::Run()
 		timestamp_last_attitude = current_time;
 		timestamp_last_attitude_set = true;
 	}
-	if(status.subscription_update_rl_tools_command = _rl_tools_command_sub.update(&_rl_tools_command)){
-		timestamp_last_command = current_time;
-		timestamp_last_command_set = true;
-		previous_command_stale = false;
+
+	trajectory_setpoint_s temp_trajectory_setpoint;
+	if(_trajectory_setpoint_sub.update(&temp_trajectory_setpoint)) {
+		if(
+			PX4_ISFINITE(temp_trajectory_setpoint.position[0]) &&
+			PX4_ISFINITE(temp_trajectory_setpoint.position[1]) &&
+			PX4_ISFINITE(temp_trajectory_setpoint.position[2]) &&
+			PX4_ISFINITE(temp_trajectory_setpoint.velocity[0]) &&
+			PX4_ISFINITE(temp_trajectory_setpoint.velocity[1]) &&
+			PX4_ISFINITE(temp_trajectory_setpoint.velocity[2])
+		){
+			timestamp_last_trajectory_setpoint_set = true;
+			timestamp_last_trajectory_setpoint = temp_trajectory_setpoint.timestamp;
+			_trajectory_setpoint = temp_trajectory_setpoint;
+		}
 	}
 
 	// if(_manual_control_input_sub.update(&_manual_control_input)) {
@@ -341,26 +392,26 @@ void RLtoolsPolicy::Run()
 
 	constexpr bool PUBLISH_NON_COMPLETE_STATUS = true;
 	if(!angular_velocity_update){
-		status.exit_reason = rl_tools_policy_status_s::EXIT_REASON_NO_ANGULAR_VELOCITY_UPDATE;
+		status.exit_reason = raptor_status_s::EXIT_REASON_NO_ANGULAR_VELOCITY_UPDATE;
 		if constexpr(PUBLISH_NON_COMPLETE_STATUS){
-			_rl_tools_policy_status_pub.publish(status);
+			_raptor_status_pub.publish(status);
 		}
 		return;
 	}
 
-	bool timestamp_last_odometry_set = RLtoolsPolicy::ODOMETRY_SOURCE == RLtoolsPolicy::OdometrySource::LOCAL_POSITION && timestamp_last_local_position_set || RLtoolsPolicy::ODOMETRY_SOURCE == RLtoolsPolicy::OdometrySource::VISUAL_ODOMETRY && timestamp_last_visual_odometry_set;
+	bool timestamp_last_odometry_set = Raptor::ODOMETRY_SOURCE == Raptor::OdometrySource::LOCAL_POSITION && timestamp_last_local_position_set || Raptor::ODOMETRY_SOURCE == Raptor::OdometrySource::VISUAL_ODOMETRY && timestamp_last_visual_odometry_set;
 	if(!timestamp_last_angular_velocity_set || !timestamp_last_odometry_set || !timestamp_last_attitude_set){
-		status.exit_reason = rl_tools_policy_status_s::EXIT_REASON_NOT_ALL_OBSERVATIONS_SET;
+		status.exit_reason = raptor_status_s::EXIT_REASON_NOT_ALL_OBSERVATIONS_SET;
 		if constexpr(PUBLISH_NON_COMPLETE_STATUS){
-			_rl_tools_policy_status_pub.publish(status);
+			_raptor_status_pub.publish(status);
 		}
 		return;
 	}
 
 	if((current_time - timestamp_last_angular_velocity) > OBSERVATION_TIMEOUT_ANGULAR_VELOCITY){
-		status.exit_reason = rl_tools_policy_status_s::EXIT_REASON_ANGULAR_VELOCITY_STALE;
+		status.exit_reason = raptor_status_s::EXIT_REASON_ANGULAR_VELOCITY_STALE;
 		if constexpr(PUBLISH_NON_COMPLETE_STATUS){
-			_rl_tools_policy_status_pub.publish(status);
+			_raptor_status_pub.publish(status);
 		}
 		if(!timeout_message_sent){
 			PX4_ERR("angular velocity timeout");
@@ -368,11 +419,11 @@ void RLtoolsPolicy::Run()
 		}
 		return;
 	}
-	if(RLtoolsPolicy::ODOMETRY_SOURCE == RLtoolsPolicy::OdometrySource::LOCAL_POSITION){
+	if(Raptor::ODOMETRY_SOURCE == Raptor::OdometrySource::LOCAL_POSITION){
 		if((current_time - timestamp_last_local_position) > OBSERVATION_TIMEOUT_LOCAL_POSITION){
-			status.exit_reason = rl_tools_policy_status_s::EXIT_REASON_LOCAL_POSITION_STALE;
+			status.exit_reason = raptor_status_s::EXIT_REASON_LOCAL_POSITION_STALE;
 			if constexpr(PUBLISH_NON_COMPLETE_STATUS){
-				_rl_tools_policy_status_pub.publish(status);
+				_raptor_status_pub.publish(status);
 			}
 			if(!timeout_message_sent){
 				PX4_ERR("local position timeout");
@@ -407,10 +458,10 @@ void RLtoolsPolicy::Run()
 			}
 			timestamp_last_visual_odometry_stale = timestamp_last_visual_odometry;
 			timestamp_last_visual_odometry_stale_set = true;
-			if(RLtoolsPolicy::ODOMETRY_SOURCE == RLtoolsPolicy::OdometrySource::VISUAL_ODOMETRY){
-				status.exit_reason = rl_tools_policy_status_s::EXIT_REASON_VISUAL_ODOMETRY_STALE;
+			if(Raptor::ODOMETRY_SOURCE == Raptor::OdometrySource::VISUAL_ODOMETRY){
+				status.exit_reason = raptor_status_s::EXIT_REASON_VISUAL_ODOMETRY_STALE;
 				if constexpr(PUBLISH_NON_COMPLETE_STATUS){
-					_rl_tools_policy_status_pub.publish(status);
+					_raptor_status_pub.publish(status);
 				}
 				if(!timeout_message_sent){
 					PX4_ERR("Visual odometry timeout");
@@ -434,11 +485,11 @@ void RLtoolsPolicy::Run()
 				PX4_WARN("VISUAL ODOMETRY STALE: End %llu uS", diff);
 			}
 			timestamp_last_visual_odometry_stale_set = false;
-			if(RLtoolsPolicy::ODOMETRY_SOURCE == RLtoolsPolicy::OdometrySource::VISUAL_ODOMETRY){
+			if(Raptor::ODOMETRY_SOURCE == Raptor::OdometrySource::VISUAL_ODOMETRY){
 				if(_vehicle_visual_odometry.pose_frame != vehicle_odometry_s::POSE_FRAME_NED){
-					status.exit_reason = rl_tools_policy_status_s::EXIT_REASON_VISUAL_ODOMETRY_WRONG_FRAME;
+					status.exit_reason = raptor_status_s::EXIT_REASON_VISUAL_ODOMETRY_WRONG_FRAME;
 					if constexpr(PUBLISH_NON_COMPLETE_STATUS){
-						_rl_tools_policy_status_pub.publish(status);
+						_raptor_status_pub.publish(status);
 					}
 					if(!timeout_message_sent){
 						PX4_ERR("Visual odometry wrong frame (should be NED)");
@@ -450,9 +501,9 @@ void RLtoolsPolicy::Run()
 					bool position_nan = std::isnan(_vehicle_visual_odometry.position[0]) || std::isnan(_vehicle_visual_odometry.position[1]) || std::isnan(_vehicle_visual_odometry.position[2]);
 					bool velocity_nan = std::isnan(_vehicle_visual_odometry.velocity[0]) || std::isnan(_vehicle_visual_odometry.velocity[1]) || std::isnan(_vehicle_visual_odometry.velocity[2]);
 					if(position_nan || velocity_nan){
-						status.exit_reason = rl_tools_policy_status_s::EXIT_REASON_VISUAL_ODOMETRY_NAN;
+						status.exit_reason = raptor_status_s::EXIT_REASON_VISUAL_ODOMETRY_NAN;
 						if constexpr(PUBLISH_NON_COMPLETE_STATUS){
-							_rl_tools_policy_status_pub.publish(status);
+							_raptor_status_pub.publish(status);
 						}
 						if(!timeout_message_sent){
 							PX4_ERR("Visual odometry contains NANs in position or velocity");
@@ -475,9 +526,9 @@ void RLtoolsPolicy::Run()
 	// position and linear_velocity are guaranteed to be set after this point
 
 	if((current_time - timestamp_last_attitude) > OBSERVATION_TIMEOUT_ATTITUDE){
-		status.exit_reason = rl_tools_policy_status_s::EXIT_REASON_ATTITUDE_STALE;
+		status.exit_reason = raptor_status_s::EXIT_REASON_ATTITUDE_STALE;
 		if constexpr(PUBLISH_NON_COMPLETE_STATUS){
-			_rl_tools_policy_status_pub.publish(status);
+			_raptor_status_pub.publish(status);
 		}
 		if(!timeout_message_sent){
 			PX4_ERR("attitude timeout");
@@ -487,21 +538,21 @@ void RLtoolsPolicy::Run()
 	}
 	timeout_message_sent = false;
 
-	if(!timestamp_last_command_set || (current_time - timestamp_last_command) > COMMAND_TIMEOUT){
-		status.command_stale = true;
-		if(!previous_command_stale){
+	if(!timestamp_last_trajectory_setpoint_set || (current_time - timestamp_last_trajectory_setpoint_set) > TRAJECTORY_SETPOINT_TIMEOUT){
+		status.trajectory_setpoint_stale = true;
+		if(!previous_trajectory_setpoint_stale){
 			PX4_WARN("Command turned stale at: %f %f %f", position[0], position[1], position[2]);
-			_rl_tools_command.target_position[0] = position[0];
-			_rl_tools_command.target_position[1] = position[1];
-			_rl_tools_command.target_position[2] = position[2];
-			_rl_tools_command.target_linear_velocity[0] = 0;
-			_rl_tools_command.target_linear_velocity[1] = 0;
-			_rl_tools_command.target_linear_velocity[2] = 0;
+			_trajectory_setpoint.position[0] = position[0];
+			_trajectory_setpoint.position[1] = position[1];
+			_trajectory_setpoint.position[2] = position[2];
+			_trajectory_setpoint.velocity[0] = 0;
+			_trajectory_setpoint.velocity[1] = 0;
+			_trajectory_setpoint.velocity[2] = 0;
 		}
-		previous_command_stale = true;
+		previous_trajectory_setpoint_stale = true;
 	}
 	else{
-		status.command_stale = false;
+		status.trajectory_setpoint_stale = false;
 	}
 
 
@@ -511,14 +562,17 @@ void RLtoolsPolicy::Run()
 	auto executor_status = rl_tools_inference_applications_l2f_control(current_time * 1000, &observation, &action);
 
 	if(executor_status.source != RL_TOOLS_INFERENCE_EXECUTOR_STATUS_SOURCE_CONTROL){
-		status.exit_reason = rl_tools_policy_status_s::EXIT_REASON_EXECUTOR_STATUS_SOURCE_NOT_CONTROL;
+		status.exit_reason = raptor_status_s::EXIT_REASON_EXECUTOR_STATUS_SOURCE_NOT_CONTROL;
 		if constexpr(PUBLISH_NON_COMPLETE_STATUS){
-			_rl_tools_policy_status_pub.publish(status);
+			_raptor_status_pub.publish(status);
 		}
 		return;
 	}
 
-	bool next_active = !status.command_stale && _rl_tools_command.active;
+	if (status.subscription_update_vehicle_status = _vehicle_status_sub.updated()) {
+		_vehicle_status_sub.copy(&_vehicle_status);
+	}
+	bool next_active = _vehicle_status.nav_state == ext_component_mode_id;
 	if(!previous_active && next_active){
 		this->reset();
 		PX4_INFO("Resetting Inference Executor (Recurrent State)");
@@ -528,9 +582,9 @@ void RLtoolsPolicy::Run()
 
 	// no return after this point!
 
-	rl_tools_policy_input_s input_msg;
+	raptor_input_s input_msg;
 	input_msg.active = status.active;
-	static_assert(rl_tools_policy_input_s::ACTION_DIM == RL_TOOLS_INTERFACE_APPLICATIONS_L2F_ACTION_DIM);
+	static_assert(raptor_input_s::ACTION_DIM == RL_TOOLS_INTERFACE_APPLICATIONS_L2F_ACTION_DIM);
 	input_msg.timestamp = current_time;
 	input_msg.timestamp_sample = current_time;
 	input_msg.timestamp_sample = _vehicle_angular_velocity.timestamp_sample;
@@ -545,8 +599,8 @@ void RLtoolsPolicy::Run()
 		input_msg.previous_action[dim_i] = observation.previous_action[dim_i];
 	}
 
-	_rl_tools_policy_input_pub.publish(input_msg);
-	_rl_tools_policy_status_pub.publish(status);
+	_raptor_input_pub.publish(input_msg);
+	_raptor_status_pub.publish(status);
 
 	actuator_motors_s actuator_motors = {}; // zero initialize to set e.g. the reversible_flags to all 0
 	actuator_motors.timestamp = hrt_absolute_time();
@@ -567,7 +621,7 @@ void RLtoolsPolicy::Run()
 			actuator_motors.control[action_i] = NAN;
 		}
 	}
-	if constexpr(RLtoolsPolicy::REMAP_FROM_CRAZYFLIE){
+	if constexpr(Raptor::REMAP_FROM_CRAZYFLIE){
 		actuator_motors_s temp = actuator_motors;
 		temp.control[0] = actuator_motors.control[0];
 		temp.control[1] = actuator_motors.control[2];
@@ -575,7 +629,10 @@ void RLtoolsPolicy::Run()
 		temp.control[3] = actuator_motors.control[1];
 		actuator_motors = temp;
 	}
-	_actuator_motors_rl_tools_pub.publish(actuator_motors);
+
+	if(status.active){
+		_actuator_motors_pub.publish(actuator_motors);
+	}
 	perf_end(_loop_perf);
 	previous_active = next_active;
 
@@ -594,21 +651,21 @@ void RLtoolsPolicy::Run()
 		if(this->timestamp_last_policy_frequency_check_set){
 			if(last_intermediate_status_set){
 				if(!this->last_intermediate_status.timing_bias.OK || !this->last_intermediate_status.timing_jitter.OK){
-					PX4_WARN("RLtoolsPolicy: INTERMEDIATE: BIAS %fx JITTER %fx", this->last_intermediate_status.timing_bias.MAGNITUDE, this->last_intermediate_status.timing_jitter.MAGNITUDE);
+					PX4_WARN("Raptor: INTERMEDIATE: BIAS %fx JITTER %fx", this->last_intermediate_status.timing_bias.MAGNITUDE, this->last_intermediate_status.timing_jitter.MAGNITUDE);
 				}
 				else{
 					if(this->policy_frequency_check_counter % POLICY_FREQUENCY_INFO_INTERVAL == 0){
-						PX4_INFO("RLtoolsPolicy: INTERMEDIATE: BIAS %fx JITTER %fx", this->last_intermediate_status.timing_bias.MAGNITUDE, this->last_intermediate_status.timing_jitter.MAGNITUDE);
+						PX4_INFO("Raptor: INTERMEDIATE: BIAS %fx JITTER %fx", this->last_intermediate_status.timing_bias.MAGNITUDE, this->last_intermediate_status.timing_jitter.MAGNITUDE);
 					}
 				}
 			}
 			if(last_native_status_set){
 				if(!this->last_native_status.timing_bias.OK || !this->last_native_status.timing_jitter.OK){
-					PX4_WARN("RLtoolsPolicy: NATIVE: BIAS %fx JITTER %fx", this->last_native_status.timing_bias.MAGNITUDE, this->last_native_status.timing_jitter.MAGNITUDE);
+					PX4_WARN("Raptor: NATIVE: BIAS %fx JITTER %fx", this->last_native_status.timing_bias.MAGNITUDE, this->last_native_status.timing_jitter.MAGNITUDE);
 				}
 				else{
 					if(this->policy_frequency_check_counter % POLICY_FREQUENCY_INFO_INTERVAL == 0){
-						PX4_INFO("RLtoolsPolicy: NATIVE: BIAS %fx JITTER %fx", this->last_native_status.timing_bias.MAGNITUDE, this->last_native_status.timing_jitter.MAGNITUDE);
+						PX4_INFO("Raptor: NATIVE: BIAS %fx JITTER %fx", this->last_native_status.timing_bias.MAGNITUDE, this->last_native_status.timing_jitter.MAGNITUDE);
 					}
 				}
 			}
@@ -629,9 +686,9 @@ void RLtoolsPolicy::Run()
 	this->num_non_healthy_executor_statii_native += (!executor_status.OK) && executor_status.source == RL_TOOLS_INFERENCE_EXECUTOR_STATUS_SOURCE_CONTROL && executor_status.step_type == RL_TOOLS_INFERENCE_EXECUTOR_STATUS_STEP_TYPE_NATIVE;
 }
 
-int RLtoolsPolicy::task_spawn(int argc, char *argv[])
+int Raptor::task_spawn(int argc, char *argv[])
 {
-	RLtoolsPolicy *instance = new RLtoolsPolicy();
+	Raptor *instance = new Raptor();
 
 	if (instance) {
 		_object.store(instance);
@@ -652,7 +709,7 @@ int RLtoolsPolicy::task_spawn(int argc, char *argv[])
 	return PX4_ERROR;
 }
 
-int RLtoolsPolicy::print_status()
+int Raptor::print_status()
 {
 	perf_print_counter(_loop_perf);
 	perf_print_counter(_loop_interval_perf);
@@ -661,12 +718,12 @@ int RLtoolsPolicy::print_status()
 	return 0;
 }
 
-int RLtoolsPolicy::custom_command(int argc, char *argv[])
+int Raptor::custom_command(int argc, char *argv[])
 {
 	return print_usage("unknown command");
 }
 
-int RLtoolsPolicy::print_usage(const char *reason)
+int Raptor::print_usage(const char *reason)
 {
 	if (reason) {
 		PX4_WARN("%s\n", reason);
@@ -679,14 +736,14 @@ RLtools Policy
 
 )DESCR_STR");
 
-	PRINT_MODULE_USAGE_NAME("rl_tools_benchmark", "template");
+	PRINT_MODULE_USAGE_NAME("mc_raptor", "template");
 	PRINT_MODULE_USAGE_COMMAND("start");
 	PRINT_MODULE_USAGE_DEFAULT_COMMANDS();
 
 	return 0;
 }
 
-extern "C" __EXPORT int rl_tools_policy_main(int argc, char *argv[])
+extern "C" __EXPORT int mc_raptor_main(int argc, char *argv[])
 {
-	return RLtoolsPolicy::main(argc, argv);
+	return Raptor::main(argc, argv);
 }

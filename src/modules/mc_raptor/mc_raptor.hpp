@@ -19,20 +19,24 @@
 #include <uORB/topics/vehicle_attitude.h>
 #include <uORB/topics/vehicle_angular_velocity.h>
 #include <uORB/topics/actuator_motors.h>
-#include <uORB/topics/rl_tools_command.h>
-#include <uORB/topics/rl_tools_policy_status.h>
-#include <uORB/topics/rl_tools_policy_input.h>
+#include <uORB/topics/trajectory_setpoint.h>
+#include <uORB/topics/register_ext_component_request.h>
+#include <uORB/topics/register_ext_component_reply.h>
+#include <uORB/topics/unregister_ext_component.h>
+#include <uORB/topics/vehicle_status.h>
+#include <uORB/topics/raptor_status.h>
+#include <uORB/topics/raptor_input.h>
 #include <uORB/topics/tune_control.h>
 
 
 
 using namespace time_literals;
 
-class RLtoolsPolicy : public ModuleBase<RLtoolsPolicy>, public ModuleParams, public px4::ScheduledWorkItem
+class Raptor : public ModuleBase<Raptor>, public ModuleParams, public px4::ScheduledWorkItem
 {
 public:
-	RLtoolsPolicy();
-	~RLtoolsPolicy() override;
+	Raptor();
+	~Raptor() override;
 
 	/** @see ModuleBase */
 	static int task_spawn(int argc, char *argv[]);
@@ -50,6 +54,7 @@ public:
 private:
 	using TI = size_t;
 	using T = float;
+	static constexpr uint64_t EXT_COMPONENT_REQUEST_ID = 1337;
 	enum class TestObservationMode: TI{
 		ANGULAR_VELOCITY = 0,
 		ORIENTATION = 1,
@@ -65,7 +70,7 @@ private:
 	static constexpr TI OBSERVATION_TIMEOUT_LOCAL_POSITION = 100 * 1000;
 	static constexpr TI OBSERVATION_TIMEOUT_VISUAL_ODOMETRY = 100 * 1000;
 	static constexpr TI OBSERVATION_TIMEOUT_ATTITUDE = 50 * 1000;
-	static constexpr TI COMMAND_TIMEOUT = 100 * 1000;
+	static constexpr TI TRAJECTORY_SETPOINT_TIMEOUT = 100 * 1000;
 	static constexpr T RESET_PREVIOUS_ACTION_VALUE = 0; // -1 to 1
 
 	enum class OdometrySource: TI{
@@ -84,17 +89,22 @@ private:
 
 	void Run() override;
 
+	decltype(register_ext_component_reply_s::mode_id) ext_component_mode_id;
+	decltype(register_ext_component_reply_s::arming_check_id) ext_component_arming_check_id;
+
+	bool flightmode_registered = false;
 
 	// node state
 	vehicle_local_position_s _vehicle_local_position{};
 	vehicle_odometry_s _vehicle_visual_odometry{};
 	vehicle_angular_velocity_s _vehicle_angular_velocity{};
 	vehicle_attitude_s _vehicle_attitude{};
-	rl_tools_command_s _rl_tools_command{};
-	hrt_abstime timestamp_last_local_position, timestamp_last_visual_odometry, timestamp_last_visual_odometry_stale, timestamp_last_angular_velocity, timestamp_last_attitude, timestamp_last_command, timestamp_last_manual_control_input;
-	bool timestamp_last_local_position_set = false, timestamp_last_visual_odometry_set = false, timestamp_last_visual_odometry_stale_set = false, timestamp_last_angular_velocity_set = false, timestamp_last_attitude_set = false, timestamp_last_command_set = false, timestamp_last_manual_control_input_set = false;
+	vehicle_status_s _vehicle_status{};
+	trajectory_setpoint_s _trajectory_setpoint{};
+	hrt_abstime timestamp_last_local_position, timestamp_last_visual_odometry, timestamp_last_visual_odometry_stale, timestamp_last_angular_velocity, timestamp_last_attitude, timestamp_last_trajectory_setpoint, timestamp_last_manual_control_input, timestamp_last_vehicle_status;
+	bool timestamp_last_local_position_set = false, timestamp_last_visual_odometry_set = false, timestamp_last_visual_odometry_stale_set = false, timestamp_last_angular_velocity_set = false, timestamp_last_attitude_set = false, timestamp_last_trajectory_setpoint_set = false, timestamp_last_manual_control_input_set = false, timestamp_last_vehicle_status_set = false;
 	bool timeout_message_sent = false;
-	bool previous_command_stale = false;
+	bool previous_trajectory_setpoint_stale = false;
 	bool previous_active = false;
 
 	static constexpr TI NUM_ODOMETRY_DTS = 1000;
@@ -106,16 +116,21 @@ private:
 
 	T position[3];
 	T linear_velocity[3];
-	
-	uORB::Subscription _rl_tools_command_sub{ORB_ID(rl_tools_command)};
+
+	// uORB::Subscription _rl_tools_command_sub{ORB_ID(rl_tools_command)};
 	uORB::SubscriptionCallbackWorkItem _vehicle_local_position_sub{this, ORB_ID(vehicle_local_position)};
 	uORB::SubscriptionCallbackWorkItem _vehicle_visual_odometry_sub{this, ORB_ID(vehicle_visual_odometry)};
 	uORB::SubscriptionCallbackWorkItem _vehicle_angular_velocity_sub{this, ORB_ID(vehicle_angular_velocity)};
 	uORB::SubscriptionCallbackWorkItem _vehicle_attitude_sub{this, ORB_ID(vehicle_attitude)};
-	uORB::Publication<actuator_motors_s> _actuator_motors_rl_tools_pub{ORB_ID(actuator_motors_rl_tools)};
-	uORB::Publication<rl_tools_policy_status_s> _rl_tools_policy_status_pub{ORB_ID(rl_tools_policy_status)};
-	uORB::Publication<rl_tools_policy_input_s> _rl_tools_policy_input_pub{ORB_ID(rl_tools_policy_input)};
+	uORB::Subscription _register_ext_component_reply_sub{ORB_ID(register_ext_component_reply)};
+	uORB::Subscription _trajectory_setpoint_sub{ORB_ID(trajectory_setpoint)};
+	uORB::Subscription _vehicle_status_sub{ORB_ID(vehicle_status)};
+	uORB::Publication<actuator_motors_s> _actuator_motors_pub{ORB_ID(actuator_motors)};
+	uORB::Publication<raptor_status_s> _raptor_status_pub{ORB_ID(raptor_status)};
+	uORB::Publication<raptor_input_s> _raptor_input_pub{ORB_ID(raptor_input)};
 	uORB::Publication<tune_control_s> _tune_control_pub{ORB_ID(tune_control)};
+	uORB::Publication<register_ext_component_request_s> _register_ext_component_request_pub{ORB_ID(register_ext_component_request)};
+	uORB::Publication<unregister_ext_component_s> _unregister_ext_component_pub{ORB_ID(unregister_ext_component)};
 
 	// Performance (perf) counters
 	perf_counter_t	_loop_perf{perf_alloc(PC_ELAPSED, MODULE_NAME": cycle")};
@@ -134,7 +149,7 @@ private:
 	void reset();
 	void observe(RLtoolsInferenceApplicationsL2FObservation& observation, TestObservationMode mode);
 
-	static constexpr bool REMAP_FROM_CRAZYFLIE = true; // Policy (Crazyflie assignment) => Quadrotor (PX4 Quadrotor X assignment) PX4 SIH assumes the Quadrotor X configuration, which assumes different rotor positions than the crazyflie mapping (from crazyflie outputs to PX4): 1=>1, 2=>4, 3=>2, 4=>3 
+	static constexpr bool REMAP_FROM_CRAZYFLIE = true; // Policy (Crazyflie assignment) => Quadrotor (PX4 Quadrotor X assignment) PX4 SIH assumes the Quadrotor X configuration, which assumes different rotor positions than the crazyflie mapping (from crazyflie outputs to PX4): 1=>1, 2=>4, 3=>2, 4=>3
 	// controller state
 
 	// messaging state
