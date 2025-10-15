@@ -27,6 +27,9 @@
 #include <uORB/topics/raptor_status.h>
 #include <uORB/topics/raptor_input.h>
 #include <uORB/topics/tune_control.h>
+#include <uORB/topics/vehicle_control_mode.h>
+#include <uORB/topics/arming_check_request.h>
+#include <uORB/topics/arming_check_reply.h>
 
 
 
@@ -92,7 +95,12 @@ private:
 	decltype(register_ext_component_reply_s::mode_id) ext_component_mode_id;
 	decltype(register_ext_component_reply_s::arming_check_id) ext_component_arming_check_id;
 
-	bool flightmode_registered = false;
+	enum class FlightModeState: TI{
+		UNREGISTERED = 0,
+		REGISTERED = 1,
+		CONFIGURED = 2
+	};
+	FlightModeState flightmode_state = FlightModeState::UNREGISTERED;
 
 	// node state
 	vehicle_local_position_s _vehicle_local_position{};
@@ -124,6 +132,7 @@ private:
 	uORB::SubscriptionCallbackWorkItem _vehicle_attitude_sub{this, ORB_ID(vehicle_attitude)};
 	uORB::Subscription _register_ext_component_reply_sub{ORB_ID(register_ext_component_reply)};
 	uORB::Subscription _trajectory_setpoint_sub{ORB_ID(trajectory_setpoint)};
+	uORB::Subscription _arming_check_request_sub{ORB_ID(arming_check_request)};
 	uORB::Subscription _vehicle_status_sub{ORB_ID(vehicle_status)};
 	uORB::Publication<actuator_motors_s> _actuator_motors_pub{ORB_ID(actuator_motors)};
 	uORB::Publication<raptor_status_s> _raptor_status_pub{ORB_ID(raptor_status)};
@@ -131,7 +140,8 @@ private:
 	uORB::Publication<tune_control_s> _tune_control_pub{ORB_ID(tune_control)};
 	uORB::Publication<register_ext_component_request_s> _register_ext_component_request_pub{ORB_ID(register_ext_component_request)};
 	uORB::Publication<unregister_ext_component_s> _unregister_ext_component_pub{ORB_ID(unregister_ext_component)};
-
+	uORB::Publication<vehicle_control_mode_s> _config_control_setpoints_pub{ORB_ID(config_control_setpoints)};
+	uORB::Publication<arming_check_reply_s> _arming_check_reply_pub{ORB_ID(arming_check_reply)};
 	// Performance (perf) counters
 	perf_counter_t	_loop_perf{perf_alloc(PC_ELAPSED, MODULE_NAME": cycle")};
 	perf_counter_t	_loop_interval_perf{perf_alloc(PC_INTERVAL, MODULE_NAME": interval")};
