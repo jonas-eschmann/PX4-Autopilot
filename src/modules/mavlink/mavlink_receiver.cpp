@@ -1133,14 +1133,14 @@ MavlinkReceiver::handle_message_set_position_target_local_ned(mavlink_message_t 
 			ocm.timestamp = hrt_absolute_time();
 			_offboard_control_mode_pub.publish(ocm);
 
-			vehicle_status_s vehicle_status{};
-			_vehicle_status_sub.copy(&vehicle_status);
+		vehicle_status_s vehicle_status{};
+		_vehicle_status_sub.copy(&vehicle_status);
 
-			if (vehicle_status.nav_state == vehicle_status_s::NAVIGATION_STATE_OFFBOARD || (vehicle_status.nav_state >= vehicle_status_s::NAVIGATION_STATE_EXTERNAL1 && vehicle_status.nav_state <= vehicle_status_s::NAVIGATION_STATE_EXTERNAL8)) {
-				// only publish setpoint once in OFFBOARD
-				setpoint.timestamp = hrt_absolute_time();
-				_trajectory_setpoint_pub.publish(setpoint);
-			}
+		if (vehicle_status.accepts_offboard_setpoints) {
+			// only publish setpoint once in mode that accepts offboard setpoints
+			setpoint.timestamp = hrt_absolute_time();
+			_trajectory_setpoint_pub.publish(setpoint);
+		}
 
 		} else {
 			mavlink_log_critical(&_mavlink_log_pub, "SET_POSITION_TARGET_LOCAL_NED invalid\t");
