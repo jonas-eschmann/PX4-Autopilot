@@ -166,6 +166,7 @@ private:
 	static constexpr TI POLICY_INTERVAL_WARNING_THRESHOLD = 100; // us
 	static constexpr TI POLICY_FREQUENCY_CHECK_INTERVAL = 1000 * 1000; // 1s
 	static constexpr TI POLICY_FREQUENCY_INFO_INTERVAL = 10; // 10 x POLICY_FREQUENCY_CHECK_INTERVAL = 10x
+	static constexpr TI POLICY_CONTROL_FREQUENCY_TRAINING = 100;
 
 	TI num_statii;
 	TI num_healthy_executor_statii_intermediate, num_non_healthy_executor_statii_intermediate, num_healthy_executor_statii_native, num_non_healthy_executor_statii_native;
@@ -177,4 +178,8 @@ private:
 	bool timestamp_last_policy_frequency_check_set = false;
 
 	float previous_action[RL_TOOLS_INTERFACE_APPLICATIONS_L2F_ACTION_DIM];
+
+	DEFINE_PARAMETERS(
+		(ParamInt<px4::params::IMU_GYRO_RATEMAX>) _param_imu_gyro_ratemax
+	)
 };

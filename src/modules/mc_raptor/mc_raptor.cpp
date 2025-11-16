@@ -87,6 +87,15 @@ bool Raptor::init()
 	register_ext_component_request.replace_internal_mode = vehicle_status_s::NAVIGATION_STATE_OFFBOARD;
 	_register_ext_component_request_pub.publish(register_ext_component_request);
 
+	int32_t imu_gyro_ratemax = _param_imu_gyro_ratemax.get();
+	if(imu_gyro_ratemax % POLICY_CONTROL_FREQUENCY_TRAINING != 0){
+		PX4_WARN("IMU_GYRO_RATEMAX=%d Hz is not a multiple of the training frequency (%d Hz)", imu_gyro_ratemax, POLICY_CONTROL_FREQUENCY_TRAINING);
+	}
+	int32_t force_sync_native = round(imu_gyro_ratemax / POLICY_CONTROL_FREQUENCY_TRAINING);
+	rl_tools_inference_applications_l2f_set_force_sync_native(force_sync_native);
+	PX4_INFO("IMU_GYRO_RATEMAX=%d Hz", imu_gyro_ratemax);
+	PX4_INFO("POLICY_CONTROL_FREQUENCY_TRAINING=%d Hz", POLICY_CONTROL_FREQUENCY_TRAINING);
+	PX4_INFO("Setting force_sync_native = %d Hz / %d Hz = %d", imu_gyro_ratemax, POLICY_CONTROL_FREQUENCY_TRAINING, force_sync_native);
 
 	return healthy;
 }
