@@ -114,56 +114,23 @@ void quaternion_conjugate(T q[4], T q_res[4]){
 	q_res[2] = -q[2];
 	q_res[3] = -q[3];
 }
-template <typename T, int ELEMENT>
-T quaternion_to_rotation_matrix(T q[4]){
+template <typename T>
+void quaternion_to_rotation_matrix(T q[4], T R[9]){
 	// row-major
 	T qw = q[0];
 	T qx = q[1];
 	T qy = q[2];
 	T qz = q[3];
 
-	static_assert(ELEMENT >= 0 && ELEMENT < 9);
-	if constexpr(ELEMENT == 0){
-		return 1 - 2*qy*qy - 2*qz*qz;
-	}
-	if constexpr(ELEMENT == 1){
-		return     2*qx*qy - 2*qw*qz;
-	}
-	if constexpr(ELEMENT == 2){
-		return     2*qx*qz + 2*qw*qy;
-	}
-	if constexpr(ELEMENT == 3){
-		return     2*qx*qy + 2*qw*qz;
-	}
-	if constexpr(ELEMENT == 4){
-		return 1 - 2*qx*qx - 2*qz*qz;
-	}
-	if constexpr(ELEMENT == 5){
-		return     2*qy*qz - 2*qw*qx;
-	}
-	if constexpr(ELEMENT == 6){
-		return     2*qx*qz - 2*qw*qy;
-	}
-	if constexpr(ELEMENT == 7){
-		return     2*qy*qz + 2*qw*qx;
-	}
-	if constexpr(ELEMENT == 8){
-		return 1 - 2*qx*qx - 2*qy*qy;
-	}
-	return 0;
-}
-
-template <typename T>
-void quaternion_to_rotation_matrix(T q[4], T R[9]){
-	R[0] = quaternion_to_rotation_matrix<T, 0>(q);
-	R[1] = quaternion_to_rotation_matrix<T, 1>(q);
-	R[2] = quaternion_to_rotation_matrix<T, 2>(q);
-	R[3] = quaternion_to_rotation_matrix<T, 3>(q);
-	R[4] = quaternion_to_rotation_matrix<T, 4>(q);
-	R[5] = quaternion_to_rotation_matrix<T, 5>(q);
-	R[6] = quaternion_to_rotation_matrix<T, 6>(q);
-	R[7] = quaternion_to_rotation_matrix<T, 7>(q);
-	R[8] = quaternion_to_rotation_matrix<T, 8>(q);
+	R[0] = 1 - 2*qy*qy - 2*qz*qz;
+	R[1] =     2*qx*qy - 2*qw*qz;
+	R[2] =     2*qx*qz + 2*qw*qy;
+	R[3] =     2*qx*qy + 2*qw*qz;
+	R[4] = 1 - 2*qx*qx - 2*qz*qz;
+	R[5] =     2*qy*qz - 2*qw*qx;
+	R[6] =     2*qx*qz - 2*qw*qy;
+	R[7] =     2*qy*qz + 2*qw*qx;
+	R[8] = 1 - 2*qx*qx - 2*qy*qy;
 }
 
 template <typename T>
