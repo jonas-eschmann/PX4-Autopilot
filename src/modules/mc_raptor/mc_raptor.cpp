@@ -274,29 +274,6 @@ void Raptor::Run()
 		flightmode_state = FlightModeState::CONFIGURED;
 		PX4_INFO("Raptor mode configuration sent");
 	}
-	if(flightmode_state == FlightModeState::CONFIGURED){
-		if (_arming_check_request_sub.updated()) {
-			arming_check_request_s arming_check_request;
-			_arming_check_request_sub.copy(&arming_check_request);
-			arming_check_reply_s arming_check_reply;
-			arming_check_reply.timestamp = hrt_absolute_time();
-			arming_check_reply.request_id = arming_check_request.request_id;
-			arming_check_reply.registration_id = ext_component_arming_check_id;
-			arming_check_reply.health_component_index = arming_check_reply.HEALTH_COMPONENT_INDEX_NONE;
-			arming_check_reply.num_events = 0;
-			arming_check_reply.can_arm_and_run = true;
-			arming_check_reply.mode_req_angular_velocity = true;
-			arming_check_reply.mode_req_local_position = true;
-			arming_check_reply.mode_req_attitude = true;
-			arming_check_reply.mode_req_local_alt = true;
-			arming_check_reply.mode_req_home_position = false;
-			arming_check_reply.mode_req_mission = false;
-			arming_check_reply.mode_req_global_position = false;
-			arming_check_reply.mode_req_prevent_arming = false;
-			arming_check_reply.mode_req_manual_control = false;
-			_arming_check_reply_pub.publish(arming_check_reply);
-		}
-	}
 
 
 
@@ -592,6 +569,30 @@ void Raptor::Run()
 
 
 	// no return after this point!
+
+	if(flightmode_state == FlightModeState::CONFIGURED){
+		if (_arming_check_request_sub.updated()) {
+			arming_check_request_s arming_check_request;
+			_arming_check_request_sub.copy(&arming_check_request);
+			arming_check_reply_s arming_check_reply;
+			arming_check_reply.timestamp = hrt_absolute_time();
+			arming_check_reply.request_id = arming_check_request.request_id;
+			arming_check_reply.registration_id = ext_component_arming_check_id;
+			arming_check_reply.health_component_index = arming_check_reply.HEALTH_COMPONENT_INDEX_NONE;
+			arming_check_reply.num_events = 0;
+			arming_check_reply.can_arm_and_run = status.active;
+			arming_check_reply.mode_req_angular_velocity = true;
+			arming_check_reply.mode_req_local_position = true;
+			arming_check_reply.mode_req_attitude = true;
+			arming_check_reply.mode_req_local_alt = true;
+			arming_check_reply.mode_req_home_position = false;
+			arming_check_reply.mode_req_mission = false;
+			arming_check_reply.mode_req_global_position = false;
+			arming_check_reply.mode_req_prevent_arming = false;
+			arming_check_reply.mode_req_manual_control = false;
+			_arming_check_reply_pub.publish(arming_check_reply);
+		}
+	}
 
 	raptor_input_s input_msg;
 	input_msg.active = status.active;
