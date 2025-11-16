@@ -39,7 +39,22 @@ struct RL_TOOLS_INFERENCE_APPLICATIONS_L2F_CONFIG{
     static constexpr bool FORCE_SYNC_NATIVE_RUNTIME = true; //
     static constexpr TI FORCE_SYNC_NATIVE = 4;
     static constexpr bool DYNAMIC_ALLOCATION = false;
+#if defined(__PX4_POSIX)
+// Relax warning levels for Gazebo sitl. Because Gazebo SITL runs at 250Hz IMU rate, it is not a clean multiple of the training frequency (100hz), hence if the thresholds are set too strict, warnings will be triggered all the time. Generally, Raptor is quite robuts agains control frequency deviations.
+    struct WARNING_LEVELS: rlt::inference::executor::WarningLevelsDefault<TYPE_POLICY>{
+        using T = typename TYPE_POLICY::DEFAULT;
+        static constexpr T INTERMEDIATE_TIMING_JITTER_HIGH_THRESHOLD_NS = 2.0;
+        static constexpr T INTERMEDIATE_TIMING_JITTER_LOW_THRESHOLD_NS = 0.5;
+        static constexpr T INTERMEDIATE_TIMING_BIAS_HIGH_THRESHOLD = 2.0;
+        static constexpr T INTERMEDIATE_TIMING_BIAS_LOW_THRESHOLD = 0.5;
+        static constexpr T NATIVE_TIMING_JITTER_HIGH_THRESHOLD_NS = 2.0;
+        static constexpr T NATIVE_TIMING_JITTER_LOW_THRESHOLD_NS = 0.5;
+        static constexpr T NATIVE_TIMING_BIAS_HIGH_THRESHOLD = 2.0;
+        static constexpr T NATIVE_TIMING_BIAS_LOW_THRESHOLD = 0.5;
+    };
+#else
     using WARNING_LEVELS = rlt::inference::executor::WarningLevelsDefault<TYPE_POLICY>;
+#endif
 };
 
 // #define RL_TOOLS_DISABLE_TEST
