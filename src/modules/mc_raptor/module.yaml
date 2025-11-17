@@ -1,0 +1,14 @@
+module_name: mc_raptor
+parameters:
+    - group: Multicopter Raptor
+      definitions:
+        MC_RAPTOR_OFFB:
+            description:
+                short: Enable Offboard mode replacement
+                long: |
+                    When enabled, the Raptor mode will replace the Offboard mode.
+                    If disabled, the Raptor mode will be available as a separate external mode. In the latter case, Raptor will just hold the position, without requiring external setpoints. When Raptor replaces the Offboard mode, it requires external setpoints to be activated.
+            type: boolean
+            default: false
+            category: System
+

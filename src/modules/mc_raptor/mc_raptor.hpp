@@ -180,7 +180,8 @@ private:
 	float previous_action[RL_TOOLS_INTERFACE_APPLICATIONS_L2F_ACTION_DIM];
 
 	DEFINE_PARAMETERS(
-		(ParamInt<px4::params::IMU_GYRO_RATEMAX>) _param_imu_gyro_ratemax
+		(ParamInt<px4::params::IMU_GYRO_RATEMAX>) _param_imu_gyro_ratemax,
+		(ParamBool<px4::params::MC_RAPTOR_OFFB>) _param_mc_raptor_offboard
 	)
 
 	void updateArmingCheckReply(bool active);

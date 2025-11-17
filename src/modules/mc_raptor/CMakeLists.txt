@@ -13,6 +13,8 @@ px4_add_module(
 	SRCS
 		mc_raptor.cpp
 		rl_tools_adapter.cpp
+	MODULE_CONFIG
+		module.yaml
 	DEPENDS
 		px4_work_queue
 		rl_tools
