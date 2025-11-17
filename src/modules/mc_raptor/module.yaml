@@ -2,6 +2,15 @@ module_name: mc_raptor
 parameters:
     - group: Multicopter Raptor
       definitions:
+        MC_RAPTOR_ENABLE:
+            description:
+                short: Enable Raptor flight mode
+                long: |
+                    When enabled, the Raptor flight mode will be available. Please set MC_RAPTOR_OFFB according to your use case.
+            type: boolean
+            default: false
+            category: System
+
         MC_RAPTOR_OFFB:
             description:
                 short: Enable Offboard mode replacement

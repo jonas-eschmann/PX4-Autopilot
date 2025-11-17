@@ -42,4 +42,8 @@ then
 	mc_nn_control start
 fi
 
-mc_raptor start
+
+if param compare -s MC_RAPTOR_ENABLE 1
+then
+	mc_raptor start
+fi
