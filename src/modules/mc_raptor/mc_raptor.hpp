@@ -182,4 +182,6 @@ private:
 	DEFINE_PARAMETERS(
 		(ParamInt<px4::params::IMU_GYRO_RATEMAX>) _param_imu_gyro_ratemax
 	)
+
+	void updateArmingCheckReply(bool active);
 };

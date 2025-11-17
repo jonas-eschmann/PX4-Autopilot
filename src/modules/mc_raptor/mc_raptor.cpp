@@ -92,7 +92,7 @@ bool Raptor::init()
 	if(imu_gyro_ratemax % POLICY_CONTROL_FREQUENCY_TRAINING != 0){
 		PX4_WARN("IMU_GYRO_RATEMAX=%d Hz is not a multiple of the training frequency (%d Hz)", imu_gyro_ratemax, POLICY_CONTROL_FREQUENCY_TRAINING);
 	}
-	int32_t force_sync_native = round(imu_gyro_ratemax / POLICY_CONTROL_FREQUENCY_TRAINING);
+	int32_t force_sync_native = imu_gyro_ratemax / POLICY_CONTROL_FREQUENCY_TRAINING;
 	rl_tools_inference_applications_l2f_set_force_sync_native(force_sync_native);
 	PX4_INFO("IMU_GYRO_RATEMAX=%d Hz", imu_gyro_ratemax);
 	PX4_INFO("POLICY_CONTROL_FREQUENCY_TRAINING=%d Hz", POLICY_CONTROL_FREQUENCY_TRAINING);
@@ -241,8 +241,35 @@ void Raptor::observe(RLtoolsInferenceApplicationsL2FObservation& observation, Te
 	}
 }
 
-void Raptor::Run()
-{
+
+void Raptor::updateArmingCheckReply(bool active){
+	if(flightmode_state == FlightModeState::CONFIGURED){
+		if (_arming_check_request_sub.updated()) {
+			arming_check_request_s arming_check_request;
+			_arming_check_request_sub.copy(&arming_check_request);
+			arming_check_reply_s arming_check_reply;
+			arming_check_reply.timestamp = hrt_absolute_time();
+			arming_check_reply.request_id = arming_check_request.request_id;
+			arming_check_reply.registration_id = ext_component_arming_check_id;
+			arming_check_reply.health_component_index = arming_check_reply.HEALTH_COMPONENT_INDEX_NONE;
+			arming_check_reply.num_events = 0;
+			arming_check_reply.can_arm_and_run = active;
+			arming_check_reply.mode_req_angular_velocity = true;
+			arming_check_reply.mode_req_local_position = true;
+			arming_check_reply.mode_req_attitude = true;
+			arming_check_reply.mode_req_local_alt = true;
+			arming_check_reply.mode_req_home_position = false;
+			arming_check_reply.mode_req_mission = false;
+			arming_check_reply.mode_req_global_position = false;
+			arming_check_reply.mode_req_prevent_arming = false;
+			arming_check_reply.mode_req_manual_control = false;
+			_arming_check_reply_pub.publish(arming_check_reply);
+		}
+	}
+}
+
+
+void Raptor::Run(){
 	if (should_exit()) {
 		_vehicle_local_position_sub.unregisterCallback();
 		_vehicle_visual_odometry_sub.unregisterCallback();
@@ -415,6 +442,7 @@ void Raptor::Run()
 			PX4_ERR("angular velocity timeout");
 			timeout_message_sent = true;
 		}
+		updateArmingCheckReply(false);
 		return;
 	}
 	if(Raptor::ODOMETRY_SOURCE == Raptor::OdometrySource::LOCAL_POSITION){
@@ -427,6 +455,7 @@ void Raptor::Run()
 				PX4_ERR("local position timeout");
 				timeout_message_sent = true;
 			}
+			updateArmingCheckReply(false);
 			return;
 		}
 		else{
@@ -465,6 +494,7 @@ void Raptor::Run()
 					PX4_ERR("Visual odometry timeout");
 					timeout_message_sent = true;
 				}
+				updateArmingCheckReply(false);
 				return;
 			}
 		}
@@ -493,6 +523,7 @@ void Raptor::Run()
 						PX4_ERR("Visual odometry wrong frame (should be NED)");
 						timeout_message_sent = true;
 					}
+					updateArmingCheckReply(false);
 					return;
 				}
 				else{
@@ -507,6 +538,7 @@ void Raptor::Run()
 							PX4_ERR("Visual odometry contains NANs in position or velocity");
 							timeout_message_sent = true;
 						}
+						updateArmingCheckReply(false);
 						return;
 					}
 					else{
@@ -532,6 +564,7 @@ void Raptor::Run()
 			PX4_ERR("attitude timeout");
 			timeout_message_sent = true;
 		}
+		updateArmingCheckReply(false);
 		return;
 	}
 	timeout_message_sent = false;
@@ -567,6 +600,7 @@ void Raptor::Run()
 		return;
 	}
 
+
 	if (status.subscription_update_vehicle_status = _vehicle_status_sub.updated()) {
 		_vehicle_status_sub.copy(&_vehicle_status);
 	}
@@ -580,29 +614,8 @@ void Raptor::Run()
 
 	// no return after this point!
 
-	if(flightmode_state == FlightModeState::CONFIGURED){
-		if (_arming_check_request_sub.updated()) {
-			arming_check_request_s arming_check_request;
-			_arming_check_request_sub.copy(&arming_check_request);
-			arming_check_reply_s arming_check_reply;
-			arming_check_reply.timestamp = hrt_absolute_time();
-			arming_check_reply.request_id = arming_check_request.request_id;
-			arming_check_reply.registration_id = ext_component_arming_check_id;
-			arming_check_reply.health_component_index = arming_check_reply.HEALTH_COMPONENT_INDEX_NONE;
-			arming_check_reply.num_events = 0;
-			arming_check_reply.can_arm_and_run = status.active;
-			arming_check_reply.mode_req_angular_velocity = true;
-			arming_check_reply.mode_req_local_position = true;
-			arming_check_reply.mode_req_attitude = true;
-			arming_check_reply.mode_req_local_alt = true;
-			arming_check_reply.mode_req_home_position = false;
-			arming_check_reply.mode_req_mission = false;
-			arming_check_reply.mode_req_global_position = false;
-			arming_check_reply.mode_req_prevent_arming = false;
-			arming_check_reply.mode_req_manual_control = false;
-			_arming_check_reply_pub.publish(arming_check_reply);
-		}
-	}
+	updateArmingCheckReply(true);
+
 
 	raptor_input_s input_msg;
 	input_msg.active = status.active;
