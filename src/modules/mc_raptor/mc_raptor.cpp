@@ -1,6 +1,8 @@
 #include "mc_raptor.hpp"
 #undef OK
 
+#include <sys/stat.h>
+
 Raptor::Raptor(): ModuleParams(nullptr), ScheduledWorkItem(MODULE_NAME, px4::wq_configurations::rate_ctrl){
 	// node state
 	timestamp_last_angular_velocity_set = false;
@@ -34,6 +36,8 @@ Raptor::~Raptor()
 	perf_free(_loop_interval_perf);
 }
 
+void rl_tools_inference_applications_l2f_init_policy(char* data, size_t size);
+
 bool Raptor::init()
 {
 	this->init_time = hrt_absolute_time();
@@ -55,7 +59,53 @@ bool Raptor::init()
 		return false;
 	}
 
+	const char *path = "policy1.tar";
+	struct stat st;
+	bool file_exists = (stat(path, &st) == 0);
+	if(file_exists){
+		PX4_INFO("Policy checkpoint %s exists", path);
+		FILE *f = fopen(path, "rb");
+		if (!f) {
+			PX4_ERR("Failed to open %s: %s", path, strerror(errno));
+			return false;
+		}
 
+		if (fseek(f, 0, SEEK_END) != 0) {
+			PX4_ERR("fseek failed: %s", strerror(errno));
+			fclose(f);
+			return false;
+		}
+
+		long size = ftell(f);
+		if (size < 0) {
+			PX4_ERR("ftell failed: %s", strerror(errno));
+			fclose(f);
+		}
+		else{
+			rewind(f);
+
+			char out[size];
+			size_t read_bytes = fread(out, 1, size, f);
+			fclose(f);
+
+			if (read_bytes != size) {
+				PX4_ERR("fread short: expected %zu got %zu", size, read_bytes);
+				return false;
+			}
+			else{
+				// PX4_INFO("File contents: ");
+				// for(int i = 0; i < size; i++){
+				// 	PX4_INFO("%d", (int)out[i]);
+				// }
+				rl_tools_inference_applications_l2f_init_policy(out, size);
+			}
+		}
+
+	}
+	else{
+		PX4_INFO("File test.txt does not exist. Loading policy from code.");
+		rl_tools_inference_applications_l2f_init_policy(nullptr, 0);
+	}
 
 	PX4_INFO("Checkpoint: %s", rl_tools_inference_applications_l2f_checkpoint_name());
 

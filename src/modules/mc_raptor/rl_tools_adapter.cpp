@@ -11,6 +11,14 @@
 
 #include "blob/policy.h"
 
+#include <rl_tools/persist/backends/tar/operations_generic.h>
+#include <rl_tools/nn/optimizers/adam/instance/persist.h>
+#include <rl_tools/nn/layers/gru/persist.h>
+#include <rl_tools/nn/layers/dense/persist.h>
+#include <rl_tools/nn_models/sequential/persist.h>
+
+
+
 namespace rlt = rl_tools;
 
 namespace other{
@@ -26,10 +34,13 @@ struct RL_TOOLS_INFERENCE_APPLICATIONS_L2F_CONFIG{
     static constexpr TI TEST_BATCH_SIZE_ACTUAL = 2;
     using ACTOR_TYPE_ORIGINAL = rlt::checkpoint::actor::TYPE;
     using POLICY_TEST = rlt::checkpoint::actor::TYPE::template CHANGE_BATCH_SIZE<TI, 1>::template CHANGE_SEQUENCE_LENGTH<TI, 1>;
-    using POLICY = ACTOR_TYPE_ORIGINAL::template CHANGE_BATCH_SIZE<TI, 1>;
+    using POLICY_BATCH_SIZE = ACTOR_TYPE_ORIGINAL::template CHANGE_BATCH_SIZE<TI, 1>;
+    using POLICY = POLICY_BATCH_SIZE::template CHANGE_CAPABILITY<rlt::nn::capability::Forward<false, false>>;
+    inline static POLICY policy_copy;
     using TYPE_POLICY = typename POLICY::TYPE_POLICY;
     static auto& policy() {
-        return rlt::checkpoint::actor::module;
+        // return rlt::checkpoint::actor::module;
+        return policy_copy;
     }
     static constexpr TI ACTION_HISTORY_LENGTH = 1;
     static constexpr TI CONTROL_INTERVAL_INTERMEDIATE_NS = 2.5 * 1000 * 1000; // Inference is at 500hz
@@ -56,6 +67,20 @@ struct RL_TOOLS_INFERENCE_APPLICATIONS_L2F_CONFIG{
     using WARNING_LEVELS = rlt::inference::executor::WarningLevelsDefault<TYPE_POLICY>;
 #endif
 };
+
+void rl_tools_inference_applications_l2f_init_policy(char* data, size_t size){
+    RL_TOOLS_INFERENCE_APPLICATIONS_L2F_CONFIG::DEVICE device;
+    if(size > 0){
+        rlt::persist::backends::tar::ReaderGroup<rlt::persist::backends::tar::ReaderGroupSpecification<RL_TOOLS_INFERENCE_APPLICATIONS_L2F_CONFIG::TI>> reader_group;
+        reader_group.data = data;
+        reader_group.size = size;
+        auto actor_group = rlt::get_group(device, reader_group, "actor");
+        rlt::load(device, RL_TOOLS_INFERENCE_APPLICATIONS_L2F_CONFIG::policy(), actor_group);
+    }
+    else{
+		rlt::copy(device, device, rl_tools::checkpoint::actor::module, RL_TOOLS_INFERENCE_APPLICATIONS_L2F_CONFIG::policy_copy);
+    }
+}
 
 // #define RL_TOOLS_DISABLE_TEST
 #include <rl_tools/inference/applications/l2f/c_backend.h>
