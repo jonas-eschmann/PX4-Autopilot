@@ -36,7 +36,7 @@ Raptor::~Raptor()
 	perf_free(_loop_interval_perf);
 }
 
-void rl_tools_inference_applications_l2f_init_policy(char* data, size_t size);
+bool rl_tools_inference_applications_l2f_init_policy(char* data, size_t size);
 
 bool Raptor::init()
 {
@@ -97,7 +97,11 @@ bool Raptor::init()
 				// for(int i = 0; i < size; i++){
 				// 	PX4_INFO("%d", (int)out[i]);
 				// }
-				rl_tools_inference_applications_l2f_init_policy(out, size);
+				bool successfully_loaded = rl_tools_inference_applications_l2f_init_policy(out, size);
+				if(!successfully_loaded){
+					PX4_ERR("Failed to load policy from file %s", path);
+					return false;
+				}
 			}
 		}
 

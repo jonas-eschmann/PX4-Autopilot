@@ -68,17 +68,18 @@ struct RL_TOOLS_INFERENCE_APPLICATIONS_L2F_CONFIG{
 #endif
 };
 
-void rl_tools_inference_applications_l2f_init_policy(char* data, size_t size){
+bool rl_tools_inference_applications_l2f_init_policy(char* data, size_t size){
     RL_TOOLS_INFERENCE_APPLICATIONS_L2F_CONFIG::DEVICE device;
     if(size > 0){
         rlt::persist::backends::tar::ReaderGroup<rlt::persist::backends::tar::ReaderGroupSpecification<RL_TOOLS_INFERENCE_APPLICATIONS_L2F_CONFIG::TI>> reader_group;
         reader_group.data = data;
         reader_group.size = size;
         auto actor_group = rlt::get_group(device, reader_group, "actor");
-        rlt::load(device, RL_TOOLS_INFERENCE_APPLICATIONS_L2F_CONFIG::policy(), actor_group);
+        return rlt::load(device, RL_TOOLS_INFERENCE_APPLICATIONS_L2F_CONFIG::policy(), actor_group);
     }
     else{
 		rlt::copy(device, device, rl_tools::checkpoint::actor::module, RL_TOOLS_INFERENCE_APPLICATIONS_L2F_CONFIG::policy_copy);
+        return true;
     }
 }
 
