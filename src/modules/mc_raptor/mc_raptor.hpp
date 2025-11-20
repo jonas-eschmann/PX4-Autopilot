@@ -90,17 +90,8 @@ private:
 	using RNG = DEVICE::SPEC::RANDOM::ENGINE<>;
 	using T = float;
 	static constexpr uint64_t EXT_COMPONENT_REQUEST_ID = 1337;
-	enum class TestObservationMode: TI{
-		ANGULAR_VELOCITY = 0,
-		ORIENTATION = 1,
-		LINEAR_VELOCITY = 2,
-		POSITION = 3,
-		ACTION_HISTORY = 4,
-	};
 	DEVICE device;
 	RNG rng;
-	// static constexpr TestObservationMode TEST_OBSERVATION_MODE = TestObservationMode::ANGULAR_VELOCITY;
-	static constexpr TestObservationMode TEST_OBSERVATION_MODE = TestObservationMode::ACTION_HISTORY;
 	hrt_abstime init_time;
 	// node constants
 	static constexpr TI OBSERVATION_TIMEOUT_ANGULAR_VELOCITY = 10 * 1000;
@@ -234,7 +225,7 @@ private:
 	#endif
 
 	void reset();
-	void observe(rl_tools::inference::applications::l2f::Observation<EXECUTOR_SPEC>& observation, TestObservationMode mode);
+	void observe(rl_tools::inference::applications::l2f::Observation<EXECUTOR_SPEC>& observation);
 
 	static constexpr bool REMAP_FROM_CRAZYFLIE = true; // Policy (Crazyflie assignment) => Quadrotor (PX4 Quadrotor X assignment) PX4 SIH assumes the Quadrotor X configuration, which assumes different rotor positions than the crazyflie mapping (from crazyflie outputs to PX4): 1=>1, 2=>4, 3=>2, 4=>3
 	// controller state

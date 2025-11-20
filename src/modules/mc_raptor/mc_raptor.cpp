@@ -286,10 +286,11 @@ void rotate_vector(T R[9], T v[3], T v_rotated[3]){
 	v_rotated[2] = R[6] * v[0] + R[7] * v[1] + R[8] * v[2];
 }
 
-void Raptor::observe(rl_tools::inference::applications::l2f::Observation<EXECUTOR_SPEC>& observation, TestObservationMode mode){
+void Raptor::observe(rl_tools::inference::applications::l2f::Observation<EXECUTOR_SPEC>& observation){
 	// converting from FRD to FLU
-	T qd[4] = {1, 0, 0, 0}, Rt_inv[9];
-	if(mode >= TestObservationMode::ORIENTATION){
+	T Rt_inv[9];
+
+	{ // Orientation
 		// FRD to FLU
 		// Validating Julia code:
 		// using Rotations
@@ -298,7 +299,6 @@ void Raptor::observe(rl_tools::inference::applications::l2f::Observation<EXECUTO
 		// q2 = UnitQuaternion(q.q.s, q.q.v1, -q.q.v2, -q.q.v3)
 		// diff = q2 - FRD2FLU * q * transpose(FRD2FLU)
 		// @assert sum(abs.(diff)) < 1e-10
-
 		T q_target[4];
 		q_target[0] = cos(0.5 * _trajectory_setpoint.yaw); // minus because the setpoint yaw is in NED
 		q_target[1] = 0;
@@ -319,6 +319,7 @@ void Raptor::observe(rl_tools::inference::applications::l2f::Observation<EXECUTO
 		qr[3] = -_vehicle_attitude.q[3];
 		// qr = qt * qd
 		// qd = qt' * qr
+		T qd[4];
 		quaternion_multiplication(qtc, qr, qd);
 
 		observation.orientation[0] = qd[0];
@@ -326,13 +327,8 @@ void Raptor::observe(rl_tools::inference::applications::l2f::Observation<EXECUTO
 		observation.orientation[2] = qd[2];
 		observation.orientation[3] = qd[3];
 	}
-	else{
-		observation.orientation[0] = 1;
-		observation.orientation[1] = 0;
-		observation.orientation[2] = 0;
-		observation.orientation[3] = 0;
-	}
-	if(mode >= TestObservationMode::POSITION){
+
+	{ // Position
 		T p[3], pt[3]; // FLU
 		p[0] = +(position[0] - _trajectory_setpoint.position[0]);
 		p[1] = -(position[1] - _trajectory_setpoint.position[1]);
@@ -342,12 +338,7 @@ void Raptor::observe(rl_tools::inference::applications::l2f::Observation<EXECUTO
 		observation.position[1] = clip(pt[1], max_position_error, -max_position_error);
 		observation.position[2] = clip(pt[2], max_position_error, -max_position_error);
 	}
-	else{
-		observation.position[0] = 0;
-		observation.position[1] = 0;
-		observation.position[2] = 0;
-	}
-	if(mode >= TestObservationMode::LINEAR_VELOCITY){
+	{ // Linear Velocity
 		T v[3], vt[3];
 		v[0] = +(linear_velocity[0] - _trajectory_setpoint.velocity[0]);
 		v[1] = -(linear_velocity[1] - _trajectory_setpoint.velocity[1]);
@@ -357,22 +348,12 @@ void Raptor::observe(rl_tools::inference::applications::l2f::Observation<EXECUTO
 		observation.linear_velocity[1] = clip(vt[1], max_velocity_error, -max_velocity_error);
 		observation.linear_velocity[2] = clip(vt[2], max_velocity_error, -max_velocity_error);
 	}
-	else{
-		observation.linear_velocity[0] = 0;
-		observation.linear_velocity[1] = 0;
-		observation.linear_velocity[2] = 0;
-	}
-	if(mode >= TestObservationMode::ANGULAR_VELOCITY){
+	{ // Angular Velocity
 		observation.angular_velocity[0] = +_vehicle_angular_velocity.xyz[0];
 		observation.angular_velocity[1] = -_vehicle_angular_velocity.xyz[1];
 		observation.angular_velocity[2] = -_vehicle_angular_velocity.xyz[2];
 	}
-	else{
-		observation.angular_velocity[0] = 0;
-		observation.angular_velocity[1] = 0;
-		observation.angular_velocity[2] = 0;
-	}
-	for(int action_i=0; action_i < EXECUTOR_CONFIG::OUTPUT_DIM; action_i++){
+	for(TI action_i=0; action_i < EXECUTOR_CONFIG::OUTPUT_DIM; action_i++){
 		observation.previous_action[action_i] = this->previous_action[action_i];
 	}
 }
@@ -733,7 +714,7 @@ void Raptor::Run(){
 
 	rl_tools::inference::applications::l2f::Observation<EXECUTOR_SPEC> observation;
 	rl_tools::inference::applications::l2f::Action<EXECUTOR_SPEC> action;
-	observe(observation, TEST_OBSERVATION_MODE);
+	observe(observation);
 	// auto executor_status = rl_tools_inference_applications_l2f_control(current_time * 1000, &observation, &action);
 	TI nanoseconds = current_time * 1000;
 	auto executor_status = rl_tools::control(device, executor, nanoseconds, policy, observation, action, rng);
