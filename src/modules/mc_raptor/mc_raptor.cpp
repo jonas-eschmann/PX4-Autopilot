@@ -30,8 +30,6 @@ void Raptor::reset(){
 	for(TI action_i=0; action_i < EXECUTOR_SPEC::OUTPUT_DIM; action_i++){
 		this->previous_action[action_i] = RESET_PREVIOUS_ACTION_VALUE;
 	}
-	// rl_tools_inference_applications_l2f_reset();
-
 	rlt::reset(device, executor, policy, rng);
 }
 
@@ -47,6 +45,7 @@ bool Raptor::test_policy(FILE *f, TI input_offset, TI output_offset){
 #endif
 	using namespace rl_tools::inference::applications::l2f;
 #ifndef RL_TOOLS_DISABLE_TEST
+	// This tests the policy using a known input output pair that has been saved into the policy checkpoint to verify that it has been loaded correctly
 	EXECUTOR_CONFIG::POLICY_TEST::template Buffer<false> buffers_test;
 	EXECUTOR_CONFIG::POLICY_TEST::State<false> policy_state_test;
 	rl_tools::Tensor<rl_tools::tensor::Specification<EXECUTOR_CONFIG::TYPE_POLICY::DEFAULT, TI, rl_tools::tensor::Shape<TI, 1, decltype(policy)::OUTPUT_SHAPE::LAST>, false>> test_output;
@@ -86,20 +85,20 @@ bool Raptor::test_policy(FILE *f, TI input_offset, TI output_offset){
 		}
 	}
 	float abs_diff = acc / num_values;
-	PX4_INFO("Checkpoint test diff: %f", abs_diff);
+	PX4_INFO("Checkpoint test diff: %f", (double)abs_diff);
 	for(TI output_i = 0; output_i < EXECUTOR_CONFIG::OUTPUT_DIM; output_i++){
-		PX4_INFO("output[%d]: %f", output_i, action.action[output_i]);
+		PX4_INFO("output[%d]: %f", (int)output_i, (double)action.action[output_i]);
 	}
 
 	constexpr float EPSILON = 1e-5;
 
 	bool healthy = abs_diff < EPSILON;
 	if(!healthy){
-		PX4_ERR("Checkpoint test failed with diff %.10f", abs_diff);
+		PX4_ERR("Checkpoint test failed with diff %.10f", (double)abs_diff);
 		return false;
 	}
 	else{
-		PX4_INFO("Checkpoint test passed with diff %.10f", abs_diff);
+		PX4_INFO("Checkpoint test passed with diff %.10f", (double)abs_diff);
 		return true;
 	}
 #else
@@ -182,11 +181,11 @@ bool Raptor::init()
 				TI input_offset = 0;
 				TI input_size = 0;
 				rlt::persist::backends::tar::seek(device, reader_group.data, "example/input/data", input_offset, input_size);
-				PX4_INFO("Input offset: %d", input_offset);
+				PX4_INFO("Input offset: %d", (int)input_offset);
 				TI output_offset = 0;
 				TI output_size = 0;
 				rlt::persist::backends::tar::seek(device, reader_group.data, "example/output/data", output_offset, output_size);
-				PX4_INFO("Output offset: %d", output_offset);
+				PX4_INFO("Output offset: %d", (int)output_offset);
 				if(!test_policy(f, input_offset, output_offset)){
 					PX4_ERR("Checkpoint test failed");
 					return false;
@@ -225,14 +224,14 @@ bool Raptor::init()
 
 	int32_t imu_gyro_ratemax = _param_imu_gyro_ratemax.get();
 	if(imu_gyro_ratemax % POLICY_CONTROL_FREQUENCY_TRAINING != 0){
-		PX4_WARN("IMU_GYRO_RATEMAX=%d Hz is not a multiple of the training frequency (%d Hz)", imu_gyro_ratemax, POLICY_CONTROL_FREQUENCY_TRAINING);
+		PX4_WARN("IMU_GYRO_RATEMAX=%d Hz is not a multiple of the training frequency (%d Hz)", (int)imu_gyro_ratemax, (int)POLICY_CONTROL_FREQUENCY_TRAINING);
 	}
 	int32_t force_sync_native = imu_gyro_ratemax / POLICY_CONTROL_FREQUENCY_TRAINING;
 	executor.executor.force_sync_native = force_sync_native;
 	executor.executor.force_sync_native_initialized = true;
-	PX4_INFO("IMU_GYRO_RATEMAX=%d Hz", imu_gyro_ratemax);
-	PX4_INFO("POLICY_CONTROL_FREQUENCY_TRAINING=%d Hz", POLICY_CONTROL_FREQUENCY_TRAINING);
-	PX4_INFO("Setting force_sync_native = %d Hz / %d Hz = %d", imu_gyro_ratemax, POLICY_CONTROL_FREQUENCY_TRAINING, force_sync_native);
+	PX4_INFO("IMU_GYRO_RATEMAX=%d Hz", (int)imu_gyro_ratemax);
+	PX4_INFO("POLICY_CONTROL_FREQUENCY_TRAINING=%d Hz", (int)POLICY_CONTROL_FREQUENCY_TRAINING);
+	PX4_INFO("Setting force_sync_native = %d Hz / %d Hz = %d", (int)imu_gyro_ratemax, (int)POLICY_CONTROL_FREQUENCY_TRAINING, (int)force_sync_native);
 
 	return true;
 }
@@ -300,10 +299,10 @@ void Raptor::observe(rl_tools::inference::applications::l2f::Observation<EXECUTO
 		// diff = q2 - FRD2FLU * q * transpose(FRD2FLU)
 		// @assert sum(abs.(diff)) < 1e-10
 		T q_target[4];
-		q_target[0] = cos(0.5 * _trajectory_setpoint.yaw); // minus because the setpoint yaw is in NED
+		q_target[0] = cosf(0.5f * _trajectory_setpoint.yaw); // minus because the setpoint yaw is in NED
 		q_target[1] = 0;
 		q_target[2] = 0;
-		q_target[3] = sin(0.5 * _trajectory_setpoint.yaw);
+		q_target[3] = sinf(0.5f * _trajectory_setpoint.yaw);
 
 		T qt[4], qtc[4], qr[4];
 		qt[0] = +q_target[0]; // conjugate to build the difference between setpoint and current
@@ -466,17 +465,22 @@ void Raptor::Run(){
 	}
 
 	bool angular_velocity_update = false;
-	if(status.subscription_update_angular_velocity = _vehicle_angular_velocity_sub.update(&_vehicle_angular_velocity)){
+	status.subscription_update_angular_velocity = _vehicle_angular_velocity_sub.update(&_vehicle_angular_velocity);
+	if(status.subscription_update_angular_velocity){
 		timestamp_last_angular_velocity = current_time;
 		timestamp_last_angular_velocity_set = true;
 		angular_velocity_update = true;
 	}
 	status.timestamp_sample = _vehicle_angular_velocity.timestamp_sample;
-	if(status.subscription_update_local_position = _vehicle_local_position_sub.update(&_vehicle_local_position)){
+
+	status.subscription_update_local_position = _vehicle_local_position_sub.update(&_vehicle_local_position);
+	if(status.subscription_update_local_position){
 		timestamp_last_local_position = current_time;
 		timestamp_last_local_position_set = true;
 	}
-	if(status.subscription_update_visual_odometry = _vehicle_visual_odometry_sub.update(&_vehicle_visual_odometry)){
+
+	status.subscription_update_visual_odometry = _vehicle_visual_odometry_sub.update(&_vehicle_visual_odometry);
+	if(status.subscription_update_visual_odometry){
 		if(timestamp_last_visual_odometry_set){
 			odometry_dts[odometry_dt_index] = current_time - timestamp_last_visual_odometry;
 			odometry_dt_index = (odometry_dt_index + 1) % NUM_ODOMETRY_DTS;
@@ -506,7 +510,8 @@ void Raptor::Run(){
 	status.visual_odometry_dt_mean /= NUM_ODOMETRY_DTS;
 	status.visual_odometry_dt_std = sqrt(status.visual_odometry_dt_std / NUM_ODOMETRY_DTS - status.visual_odometry_dt_mean * status.visual_odometry_dt_mean);
 
-	if(status.subscription_update_attitude = _vehicle_attitude_sub.update(&_vehicle_attitude)){
+	status.subscription_update_attitude = _vehicle_attitude_sub.update(&_vehicle_attitude);
+	if(status.subscription_update_attitude){
 		timestamp_last_attitude = current_time;
 		timestamp_last_attitude_set = true;
 	}
@@ -543,7 +548,7 @@ void Raptor::Run(){
 		return;
 	}
 
-	bool timestamp_last_odometry_set = Raptor::ODOMETRY_SOURCE == Raptor::OdometrySource::LOCAL_POSITION && timestamp_last_local_position_set || Raptor::ODOMETRY_SOURCE == Raptor::OdometrySource::VISUAL_ODOMETRY && timestamp_last_visual_odometry_set;
+	bool timestamp_last_odometry_set = (Raptor::ODOMETRY_SOURCE == Raptor::OdometrySource::LOCAL_POSITION && timestamp_last_local_position_set) || (Raptor::ODOMETRY_SOURCE == Raptor::OdometrySource::VISUAL_ODOMETRY && timestamp_last_visual_odometry_set);
 	if(!timestamp_last_angular_velocity_set || !timestamp_last_odometry_set || !timestamp_last_attitude_set){
 		status.exit_reason = raptor_status_s::EXIT_REASON_NOT_ALL_OBSERVATIONS_SET;
 		if constexpr(PUBLISH_NON_COMPLETE_STATUS){
@@ -600,7 +605,7 @@ void Raptor::Run(){
 				tune_control.frequency = 1000;
 				tune_control.duration = 10000;
 				_tune_control_pub.publish(tune_control);
-				PX4_WARN("VISUAL ODOMETRY STALE: Begin");
+				PX4_WARN("Visual odometry stale: begin");
 			}
 			timestamp_last_visual_odometry_stale = timestamp_last_visual_odometry;
 			timestamp_last_visual_odometry_stale_set = true;
@@ -629,7 +634,7 @@ void Raptor::Run(){
 				tune_control.frequency = 2000;
 				tune_control.duration = min(10000000, diff);
 				_tune_control_pub.publish(tune_control);
-				PX4_WARN("VISUAL ODOMETRY STALE: End %llu uS", diff);
+				PX4_WARN("Visual odometry stale: end %llu uS", (unsigned long long)diff);
 			}
 			timestamp_last_visual_odometry_stale_set = false;
 			if(Raptor::ODOMETRY_SOURCE == Raptor::OdometrySource::VISUAL_ODOMETRY){
@@ -691,7 +696,7 @@ void Raptor::Run(){
 	if(!timestamp_last_trajectory_setpoint_set || (current_time - timestamp_last_trajectory_setpoint) > TRAJECTORY_SETPOINT_TIMEOUT){
 		status.trajectory_setpoint_stale = true;
 		if(!previous_trajectory_setpoint_stale){
-			PX4_WARN("trajectory_setpoint turned stale at: %f %f %f", position[0], position[1], position[2]);
+			PX4_WARN("trajectory_setpoint turned stale at: %f %f %f", (double)position[0], (double)position[1], (double)position[2]);
 			_trajectory_setpoint.position[0] = position[0];
 			_trajectory_setpoint.position[1] = position[1];
 			_trajectory_setpoint.position[2] = position[2];
@@ -705,7 +710,7 @@ void Raptor::Run(){
 	}
 	else{
 		if(previous_trajectory_setpoint_stale){
-			PX4_WARN("trajectory_setpoint turned non-stale at: %f %f %f", position[0], position[1], position[2]);
+			PX4_WARN("trajectory_setpoint turned non-stale at: %f %f %f", (double)position[0], (double)position[1], (double)position[2]);
 			previous_trajectory_setpoint_stale = false;
 		}
 		status.trajectory_setpoint_stale = false;
@@ -715,7 +720,6 @@ void Raptor::Run(){
 	rl_tools::inference::applications::l2f::Observation<EXECUTOR_SPEC> observation;
 	rl_tools::inference::applications::l2f::Action<EXECUTOR_SPEC> action;
 	observe(observation);
-	// auto executor_status = rl_tools_inference_applications_l2f_control(current_time * 1000, &observation, &action);
 	TI nanoseconds = current_time * 1000;
 	auto executor_status = rl_tools::control(device, executor, nanoseconds, policy, observation, action, rng);
 
@@ -727,8 +731,8 @@ void Raptor::Run(){
 		return;
 	}
 
-
-	if (status.subscription_update_vehicle_status = _vehicle_status_sub.updated()) {
+	status.subscription_update_vehicle_status = _vehicle_status_sub.updated();
+	if(status.subscription_update_vehicle_status) {
 		_vehicle_status_sub.copy(&_vehicle_status);
 	}
 	bool next_active = _vehicle_status.nav_state == ext_component_mode_id;
@@ -764,7 +768,7 @@ void Raptor::Run(){
 	_raptor_input_pub.publish(input_msg);
 	_raptor_status_pub.publish(status);
 
-	actuator_motors_s actuator_motors = {}; // zero initialize to set e.g. the reversible_flags to all 0
+	actuator_motors_s actuator_motors{};
 	actuator_motors.timestamp = hrt_absolute_time();
 	actuator_motors.timestamp_sample = _vehicle_angular_velocity.timestamp_sample;
 	for(TI action_i=0; action_i < actuator_motors_s::NUM_CONTROLS; action_i++){
@@ -813,7 +817,7 @@ void Raptor::Run(){
 		if(this->timestamp_last_policy_frequency_check_set){
 			if(last_intermediate_status_set){
 				if(!this->last_intermediate_status.timing_bias.OK || !this->last_intermediate_status.timing_jitter.OK){
-					PX4_WARN("Raptor: INTERMEDIATE: BIAS %fx JITTER %fx", this->last_intermediate_status.timing_bias.MAGNITUDE, this->last_intermediate_status.timing_jitter.MAGNITUDE);
+					PX4_WARN("Raptor: INTERMEDIATE: BIAS %fx JITTER %fx", (double)this->last_intermediate_status.timing_bias.MAGNITUDE, (double)this->last_intermediate_status.timing_jitter.MAGNITUDE);
 				}
 				else{
 					if(this->policy_frequency_check_counter % POLICY_FREQUENCY_INFO_INTERVAL == 0){
@@ -823,7 +827,7 @@ void Raptor::Run(){
 			}
 			if(last_native_status_set){
 				if(!this->last_native_status.timing_bias.OK || !this->last_native_status.timing_jitter.OK){
-					PX4_WARN("Raptor: NATIVE: BIAS %fx JITTER %fx", this->last_native_status.timing_bias.MAGNITUDE, this->last_native_status.timing_jitter.MAGNITUDE);
+					PX4_WARN("Raptor: NATIVE: BIAS %fx JITTER %fx", (double)this->last_native_status.timing_bias.MAGNITUDE, (double)this->last_native_status.timing_jitter.MAGNITUDE);
 				}
 				else{
 					if(this->policy_frequency_check_counter % POLICY_FREQUENCY_INFO_INTERVAL == 0){

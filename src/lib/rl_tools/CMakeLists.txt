@@ -6,8 +6,9 @@ if(CONFIG_LIB_RL_TOOLS)
 
 	target_compile_features(rl_tools INTERFACE cxx_std_17)
 
-	# target_compile_options(rl_tools INTERFACE
-	# 	-Wno-unused-parameter
-	# 	-Wno-unused-variable
-	# )
+	target_compile_options(rl_tools INTERFACE
+		-Wno-unused-parameter
+		-Wno-unused-variable
+		-Wno-unused-local-typedefs
+	)
 endif()

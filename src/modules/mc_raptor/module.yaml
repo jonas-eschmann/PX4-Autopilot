@@ -9,7 +9,15 @@ parameters:
                     When enabled, the Raptor flight mode will be available. Please set MC_RAPTOR_OFFB according to your use case.
             type: boolean
             default: false
-            category: System
+            category: Raptor
+        MC_RAPTOR_VERBOS:
+            description:
+                short: Enable verbose output
+                long: |
+                    When enabled, the Raptor will print verbose output to the console.
+            type: boolean
+            default: false
+            category: Raptor
 
         MC_RAPTOR_OFFB:
             description:
@@ -19,5 +27,5 @@ parameters:
                     If disabled, the Raptor mode will be available as a separate external mode. In the latter case, Raptor will just hold the position, without requiring external setpoints. When Raptor replaces the Offboard mode, it requires external setpoints to be activated.
             type: boolean
             default: false
-            category: System
+            category: Raptor
 
