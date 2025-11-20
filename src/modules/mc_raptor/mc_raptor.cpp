@@ -1,6 +1,9 @@
 #include "mc_raptor.hpp"
 #undef OK
 
+#include <rl_tools/inference/applications/l2f/operations_generic.h>
+#include <rl_tools/persist/backends/tar/operations_generic.h>
+
 #include <sys/stat.h>
 
 Raptor::Raptor(): ModuleParams(nullptr), ScheduledWorkItem(MODULE_NAME, px4::wq_configurations::rate_ctrl){
@@ -24,10 +27,12 @@ Raptor::Raptor(): ModuleParams(nullptr), ScheduledWorkItem(MODULE_NAME, px4::wq_
 void Raptor::reset(){
 	this->visual_odometry_stale_counter = 0;
 	this->timestamp_last_visual_odometry_stale_set = false;
-	for(int action_i=0; action_i < RL_TOOLS_INTERFACE_APPLICATIONS_L2F_ACTION_DIM; action_i++){
+	for(TI action_i=0; action_i < EXECUTOR_SPEC::OUTPUT_DIM; action_i++){
 		this->previous_action[action_i] = RESET_PREVIOUS_ACTION_VALUE;
 	}
-	rl_tools_inference_applications_l2f_reset();
+	// rl_tools_inference_applications_l2f_reset();
+
+	rlt::reset(device, executor, policy, rng);
 }
 
 Raptor::~Raptor()
@@ -36,7 +41,71 @@ Raptor::~Raptor()
 	perf_free(_loop_interval_perf);
 }
 
-bool rl_tools_inference_applications_l2f_init_policy(char* data, size_t size);
+#ifdef MC_RAPTOR_EMBED_POLICY
+#else
+bool Raptor::test_policy(FILE *f, TI input_offset, TI output_offset){
+#endif
+	using namespace rl_tools::inference::applications::l2f;
+#ifndef RL_TOOLS_DISABLE_TEST
+	EXECUTOR_CONFIG::POLICY_TEST::template Buffer<false> buffers_test;
+	EXECUTOR_CONFIG::POLICY_TEST::State<false> policy_state_test;
+	rl_tools::Tensor<rl_tools::tensor::Specification<EXECUTOR_CONFIG::TYPE_POLICY::DEFAULT, TI, rl_tools::tensor::Shape<TI, 1, decltype(policy)::OUTPUT_SHAPE::LAST>, false>> test_output;
+	rl_tools::Mode<rl_tools::mode::Evaluation<>> mode;
+	using EXAMPLE_INPUT_SPEC = rl_tools::checkpoint::example::input::SPEC;
+	using EXAMPLE_OUTPUT_SPEC = rl_tools::checkpoint::example::output::SPEC;
+	float acc = 0;
+	uint64_t num_values = 0;
+	rl_tools::inference::applications::l2f::Action<EXECUTOR_SPEC> action;
+	for(TI batch_i = 0; batch_i < EXECUTOR_CONFIG::TEST_BATCH_SIZE_ACTUAL; batch_i++){
+		rl_tools::reset(device, policy, policy_state_test, rng);
+		for(TI step_i = 0; step_i < EXECUTOR_CONFIG::TEST_SEQUENCE_LENGTH_ACTUAL; step_i++){
+#ifdef MC_RAPTOR_EMBED_POLICY
+			const auto step_input = rl_tools::view(device, rl_tools::checkpoint::example::input::container, step_i);
+			const auto batch_input = rl_tools::view_range(device, step_input, batch_i);
+			const auto step_output_target = rl_tools::view_range(device, rl_tools::checkpoint::example::output::container, step_i);
+			const auto batch_output_target = rl_tools::view_range(device, step_output_target, batch_i);
+#else
+			rl_tools::Tensor<rl_tools::tensor::Specification<EXECUTOR_CONFIG::TYPE_POLICY::DEFAULT, TI, rl_tools::tensor::Shape<TI, 1, EXAMPLE_INPUT_SPEC::SHAPE::LAST>, false>> batch_input;
+			rl_tools::Tensor<rl_tools::tensor::Specification<EXECUTOR_CONFIG::TYPE_POLICY::DEFAULT, TI, rl_tools::tensor::Shape<TI, 1, EXAMPLE_OUTPUT_SPEC::SHAPE::LAST>, false>> batch_output_target;
+			fseek(f, input_offset + (step_i * EXAMPLE_INPUT_SPEC::STRIDE::FIRST + batch_i * EXAMPLE_INPUT_SPEC::STRIDE::template GET<1>)*sizeof(EXAMPLE_INPUT_SPEC::T), SEEK_SET);
+			fread(batch_input._data, sizeof(EXAMPLE_INPUT_SPEC::T), EXAMPLE_INPUT_SPEC::SHAPE::LAST, f);
+			fseek(f, output_offset + (step_i * EXAMPLE_OUTPUT_SPEC::STRIDE::FIRST + batch_i * EXAMPLE_OUTPUT_SPEC::STRIDE::template GET<1>)*sizeof(EXAMPLE_OUTPUT_SPEC::T), SEEK_SET);
+			fread(batch_output_target._data, sizeof(EXAMPLE_OUTPUT_SPEC::T), EXAMPLE_OUTPUT_SPEC::SHAPE::LAST, f);
+#endif
+			rl_tools::utils::assert_exit(device, !rl_tools::is_nan(device, batch_input), "input is nan");
+			rl_tools::evaluate_step(device, policy, batch_input, policy_state_test, test_output, buffers_test, rng, mode);
+			rl_tools::utils::assert_exit(device, !rl_tools::is_nan(device, test_output), "output is nan");
+			for(TI action_i = 0; action_i < EXECUTOR_CONFIG::OUTPUT_DIM; action_i++){
+				acc += rl_tools::math::abs(device.math, rl_tools::get(device, test_output, 0, action_i) - rl_tools::get(device, batch_output_target, 0, action_i));
+				num_values += 1;
+				rl_tools::utils::assert_exit(device, !rl_tools::math::is_nan(device.math, acc), "output is nan");
+				if(batch_i == 0 && step_i == EXECUTOR_CONFIG::TEST_SEQUENCE_LENGTH_ACTUAL-1){
+					action.action[action_i] = rl_tools::get(device, test_output, 0, action_i);
+				}
+			}
+		}
+	}
+	float abs_diff = acc / num_values;
+	PX4_INFO("Checkpoint test diff: %f", abs_diff);
+	for(TI output_i = 0; output_i < EXECUTOR_CONFIG::OUTPUT_DIM; output_i++){
+		PX4_INFO("output[%d]: %f", output_i, action.action[output_i]);
+	}
+
+	constexpr float EPSILON = 1e-5;
+
+	bool healthy = abs_diff < EPSILON;
+	if(!healthy){
+		PX4_ERR("Checkpoint test failed with diff %.10f", abs_diff);
+		return false;
+	}
+	else{
+		PX4_INFO("Checkpoint test passed with diff %.10f", abs_diff);
+		return true;
+	}
+#else
+	return 0;
+#endif
+}
 
 bool Raptor::init()
 {
@@ -59,7 +128,8 @@ bool Raptor::init()
 		return false;
 	}
 
-	const char *path = "policy1.tar";
+	#ifndef MC_RAPTOR_EMBED_POLICY
+	const char *path = "raptor/policy.tar";
 	struct stat st;
 	bool file_exists = (stat(path, &st) == 0);
 	if(file_exists){
@@ -80,55 +150,66 @@ bool Raptor::init()
 		if (size < 0) {
 			PX4_ERR("ftell failed: %s", strerror(errno));
 			fclose(f);
+			return false;
 		}
 		else{
 			rewind(f);
-
-			char out[size];
-			size_t read_bytes = fread(out, 1, size, f);
-			fclose(f);
-
-			if (read_bytes != size) {
-				PX4_ERR("fread short: expected %zu got %zu", size, read_bytes);
-				return false;
+			bool successfully_loaded = false;
+			using SPEC = rlt::persist::backends::tar::ReaderGroupSpecification<TI, rlt::persist::backends::tar::PosixFileData<TI>>;
+			rlt::persist::backends::tar::ReaderGroup<SPEC> reader_group;
+			reader_group.data.f = f;
+			reader_group.data.size = size;
+			auto actor_group = rlt::get_group(device, reader_group, "actor");
+			successfully_loaded = rlt::load(device, policy, actor_group);
+			constexpr TI METADATA_BUFFER_SIZE = 256;
+			char metadata_buffer[METADATA_BUFFER_SIZE];
+			TI read_size = 0;
+			rlt::persist::backends::tar::get(device, reader_group.data, "actor/meta", metadata_buffer, METADATA_BUFFER_SIZE, read_size);
+			TI checkpoint_name_position = 0;
+			TI checkpoint_name_len = 0;
+			if(rlt::persist::backends::tar::seek_in_metadata(device, metadata_buffer, METADATA_BUFFER_SIZE, "checkpoint_name", checkpoint_name_position, checkpoint_name_len)){
+				strncpy(checkpoint_name, metadata_buffer + checkpoint_name_position, CHECKPOINT_NAME_LENGTH);
+				checkpoint_name[checkpoint_name_len < CHECKPOINT_NAME_LENGTH ? checkpoint_name_len : CHECKPOINT_NAME_LENGTH - 1] = '\0';
+				PX4_INFO("Checkpoint name: %s", checkpoint_name);
 			}
 			else{
-				// PX4_INFO("File contents: ");
-				// for(int i = 0; i < size; i++){
-				// 	PX4_INFO("%d", (int)out[i]);
-				// }
-				bool successfully_loaded = rl_tools_inference_applications_l2f_init_policy(out, size);
-				if(!successfully_loaded){
-					PX4_ERR("Failed to load policy from file %s", path);
+				PX4_ERR("Failed to get checkpoint name from metadata");
+				return false;
+			}
+
+			if(successfully_loaded){
+				PX4_INFO("Policy loaded from file %s", path);
+				TI input_offset = 0;
+				TI input_size = 0;
+				rlt::persist::backends::tar::seek(device, reader_group.data, "example/input/data", input_offset, input_size);
+				PX4_INFO("Input offset: %d", input_offset);
+				TI output_offset = 0;
+				TI output_size = 0;
+				rlt::persist::backends::tar::seek(device, reader_group.data, "example/output/data", output_offset, output_size);
+				PX4_INFO("Output offset: %d", output_offset);
+				if(!test_policy(f, input_offset, output_offset)){
+					PX4_ERR("Checkpoint test failed");
 					return false;
 				}
 			}
+			else{
+				PX4_ERR("Failed to load policy from file %s", path);
+				return false;
+			}
+			fclose(f);
 		}
-
 	}
 	else{
-		PX4_INFO("File test.txt does not exist. Loading policy from code.");
-		rl_tools_inference_applications_l2f_init_policy(nullptr, 0);
+		PX4_INFO("File %s does not exist", path);
+		return false;
 	}
+	#else
+		if(!test_policy()){
+			PX4_ERR("Checkpoint test failed");
+			return false;
+		}
+	#endif
 
-	PX4_INFO("Checkpoint: %s", rl_tools_inference_applications_l2f_checkpoint_name());
-
-	RLtoolsInferenceApplicationsL2FAction action;
-	float abs_diff = rl_tools_inference_applications_l2f_test(&action);
-	PX4_INFO("Checkpoint test diff: %f", abs_diff);
-	for(TI output_i = 0; output_i < RL_TOOLS_INTERFACE_APPLICATIONS_L2F_ACTION_DIM; output_i++){
-		PX4_INFO("output[%d]: %f", output_i, action.action[output_i]);
-	}
-
-	constexpr float EPSILON = 1e-5;
-
-	bool healthy = abs_diff < EPSILON;
-	if(!healthy){
-		PX4_ERR("Checkpoint test failed with diff %.10f", abs_diff);
-	}
-	else{
-		PX4_INFO("Checkpoint test passed with diff %.10f", abs_diff);
-	}
 
 	register_ext_component_request_s register_ext_component_request{};
 	register_ext_component_request.timestamp = hrt_absolute_time();
@@ -147,12 +228,13 @@ bool Raptor::init()
 		PX4_WARN("IMU_GYRO_RATEMAX=%d Hz is not a multiple of the training frequency (%d Hz)", imu_gyro_ratemax, POLICY_CONTROL_FREQUENCY_TRAINING);
 	}
 	int32_t force_sync_native = imu_gyro_ratemax / POLICY_CONTROL_FREQUENCY_TRAINING;
-	rl_tools_inference_applications_l2f_set_force_sync_native(force_sync_native);
+	executor.executor.force_sync_native = force_sync_native;
+	executor.executor.force_sync_native_initialized = true;
 	PX4_INFO("IMU_GYRO_RATEMAX=%d Hz", imu_gyro_ratemax);
 	PX4_INFO("POLICY_CONTROL_FREQUENCY_TRAINING=%d Hz", POLICY_CONTROL_FREQUENCY_TRAINING);
 	PX4_INFO("Setting force_sync_native = %d Hz / %d Hz = %d", imu_gyro_ratemax, POLICY_CONTROL_FREQUENCY_TRAINING, force_sync_native);
 
-	return healthy;
+	return true;
 }
 template <typename T>
 T clip(T x, T max, T min){
@@ -204,7 +286,7 @@ void rotate_vector(T R[9], T v[3], T v_rotated[3]){
 	v_rotated[2] = R[6] * v[0] + R[7] * v[1] + R[8] * v[2];
 }
 
-void Raptor::observe(RLtoolsInferenceApplicationsL2FObservation& observation, TestObservationMode mode){
+void Raptor::observe(rl_tools::inference::applications::l2f::Observation<EXECUTOR_SPEC>& observation, TestObservationMode mode){
 	// converting from FRD to FLU
 	T qd[4] = {1, 0, 0, 0}, Rt_inv[9];
 	if(mode >= TestObservationMode::ORIENTATION){
@@ -290,7 +372,7 @@ void Raptor::observe(RLtoolsInferenceApplicationsL2FObservation& observation, Te
 		observation.angular_velocity[1] = 0;
 		observation.angular_velocity[2] = 0;
 	}
-	for(int action_i=0; action_i < RL_TOOLS_INTERFACE_APPLICATIONS_L2F_ACTION_DIM; action_i++){
+	for(int action_i=0; action_i < EXECUTOR_CONFIG::OUTPUT_DIM; action_i++){
 		observation.previous_action[action_i] = this->previous_action[action_i];
 	}
 }
@@ -454,9 +536,11 @@ void Raptor::Run(){
 			PX4_ISFINITE(temp_trajectory_setpoint.position[0]) &&
 			PX4_ISFINITE(temp_trajectory_setpoint.position[1]) &&
 			PX4_ISFINITE(temp_trajectory_setpoint.position[2]) &&
+			PX4_ISFINITE(temp_trajectory_setpoint.yaw) &&
 			PX4_ISFINITE(temp_trajectory_setpoint.velocity[0]) &&
 			PX4_ISFINITE(temp_trajectory_setpoint.velocity[1]) &&
-			PX4_ISFINITE(temp_trajectory_setpoint.velocity[2])
+			PX4_ISFINITE(temp_trajectory_setpoint.velocity[2]) &&
+			PX4_ISFINITE(temp_trajectory_setpoint.yawspeed)
 		){
 			timestamp_last_trajectory_setpoint_set = true;
 			timestamp_last_trajectory_setpoint = temp_trajectory_setpoint.timestamp;
@@ -623,30 +707,38 @@ void Raptor::Run(){
 	}
 	timeout_message_sent = false;
 
-	if(!timestamp_last_trajectory_setpoint_set || (current_time - timestamp_last_trajectory_setpoint_set) > TRAJECTORY_SETPOINT_TIMEOUT){
+	if(!timestamp_last_trajectory_setpoint_set || (current_time - timestamp_last_trajectory_setpoint) > TRAJECTORY_SETPOINT_TIMEOUT){
 		status.trajectory_setpoint_stale = true;
 		if(!previous_trajectory_setpoint_stale){
-			PX4_WARN("Command turned stale at: %f %f %f", position[0], position[1], position[2]);
+			PX4_WARN("trajectory_setpoint turned stale at: %f %f %f", position[0], position[1], position[2]);
 			_trajectory_setpoint.position[0] = position[0];
 			_trajectory_setpoint.position[1] = position[1];
 			_trajectory_setpoint.position[2] = position[2];
+			_trajectory_setpoint.yaw = 0;
 			_trajectory_setpoint.velocity[0] = 0;
 			_trajectory_setpoint.velocity[1] = 0;
 			_trajectory_setpoint.velocity[2] = 0;
+			_trajectory_setpoint.yawspeed = 0;
 		}
 		previous_trajectory_setpoint_stale = true;
 	}
 	else{
+		if(previous_trajectory_setpoint_stale){
+			PX4_WARN("trajectory_setpoint turned non-stale at: %f %f %f", position[0], position[1], position[2]);
+			previous_trajectory_setpoint_stale = false;
+		}
 		status.trajectory_setpoint_stale = false;
 	}
 
 
-	RLtoolsInferenceApplicationsL2FObservation observation;
-	RLtoolsInferenceApplicationsL2FAction action;
+	rl_tools::inference::applications::l2f::Observation<EXECUTOR_SPEC> observation;
+	rl_tools::inference::applications::l2f::Action<EXECUTOR_SPEC> action;
 	observe(observation, TEST_OBSERVATION_MODE);
-	auto executor_status = rl_tools_inference_applications_l2f_control(current_time * 1000, &observation, &action);
+	// auto executor_status = rl_tools_inference_applications_l2f_control(current_time * 1000, &observation, &action);
+	TI nanoseconds = current_time * 1000;
+	auto executor_status = rl_tools::control(device, executor, nanoseconds, policy, observation, action, rng);
 
-	if(executor_status.source != RL_TOOLS_INFERENCE_EXECUTOR_STATUS_SOURCE_CONTROL){
+	if(executor_status.source != decltype(executor_status.source)::CONTROL){
 		status.exit_reason = raptor_status_s::EXIT_REASON_EXECUTOR_STATUS_SOURCE_NOT_CONTROL;
 		if constexpr(PUBLISH_NON_COMPLETE_STATUS){
 			_raptor_status_pub.publish(status);
@@ -673,7 +765,7 @@ void Raptor::Run(){
 
 	raptor_input_s input_msg;
 	input_msg.active = status.active;
-	static_assert(raptor_input_s::ACTION_DIM == RL_TOOLS_INTERFACE_APPLICATIONS_L2F_ACTION_DIM);
+	static_assert(raptor_input_s::ACTION_DIM == EXECUTOR_CONFIG::OUTPUT_DIM);
 	input_msg.timestamp = current_time;
 	input_msg.timestamp_sample = current_time;
 	input_msg.timestamp_sample = _vehicle_angular_velocity.timestamp_sample;
@@ -684,7 +776,7 @@ void Raptor::Run(){
 		input_msg.angular_velocity[dim_i] = observation.angular_velocity[dim_i];
 	}
 	input_msg.orientation[3] = observation.orientation[3];
-	for(TI dim_i = 0; dim_i < RL_TOOLS_INTERFACE_APPLICATIONS_L2F_ACTION_DIM; dim_i++){
+	for(TI dim_i = 0; dim_i < EXECUTOR_CONFIG::OUTPUT_DIM; dim_i++){
 		input_msg.previous_action[dim_i] = observation.previous_action[dim_i];
 	}
 
@@ -695,7 +787,7 @@ void Raptor::Run(){
 	actuator_motors.timestamp = hrt_absolute_time();
 	actuator_motors.timestamp_sample = _vehicle_angular_velocity.timestamp_sample;
 	for(TI action_i=0; action_i < actuator_motors_s::NUM_CONTROLS; action_i++){
-		if(action_i < RL_TOOLS_INTERFACE_APPLICATIONS_L2F_ACTION_DIM){
+		if(action_i < EXECUTOR_CONFIG::OUTPUT_DIM){
 			T value = action.action[action_i];
 			this->previous_action[action_i] = value;
 			value = (value + 1) / 2;
@@ -725,12 +817,12 @@ void Raptor::Run(){
 	perf_end(_loop_perf);
 	previous_active = next_active;
 
-	if(executor_status.source == RL_TOOLS_INFERENCE_EXECUTOR_STATUS_SOURCE_CONTROL){
-		if(executor_status.step_type == RL_TOOLS_INFERENCE_EXECUTOR_STATUS_STEP_TYPE_INTERMEDIATE){
+	if(executor_status.source == decltype(executor_status.source)::CONTROL){
+		if(executor_status.step_type == decltype(executor_status.step_type)::INTERMEDIATE){
 			this->last_intermediate_status = executor_status;
 			this->last_intermediate_status_set = true;
 		}
-		else if(executor_status.step_type == RL_TOOLS_INFERENCE_EXECUTOR_STATUS_STEP_TYPE_NATIVE){
+		else if(executor_status.step_type == decltype(executor_status.step_type)::NATIVE){
 			this->last_native_status = executor_status;
 			this->last_native_status_set = true;
 		}
@@ -769,10 +861,10 @@ void Raptor::Run(){
 		this->policy_frequency_check_counter++;
 	}
 	this->num_statii++;
-	this->num_healthy_executor_statii_intermediate += executor_status.OK && executor_status.source == RL_TOOLS_INFERENCE_EXECUTOR_STATUS_SOURCE_CONTROL && executor_status.step_type == RL_TOOLS_INFERENCE_EXECUTOR_STATUS_STEP_TYPE_INTERMEDIATE;
-	this->num_non_healthy_executor_statii_intermediate += (!executor_status.OK) && executor_status.source == RL_TOOLS_INFERENCE_EXECUTOR_STATUS_SOURCE_CONTROL && executor_status.step_type == RL_TOOLS_INFERENCE_EXECUTOR_STATUS_STEP_TYPE_INTERMEDIATE;
-	this->num_healthy_executor_statii_native += executor_status.OK && executor_status.source == RL_TOOLS_INFERENCE_EXECUTOR_STATUS_SOURCE_CONTROL && executor_status.step_type == RL_TOOLS_INFERENCE_EXECUTOR_STATUS_STEP_TYPE_NATIVE;
-	this->num_non_healthy_executor_statii_native += (!executor_status.OK) && executor_status.source == RL_TOOLS_INFERENCE_EXECUTOR_STATUS_SOURCE_CONTROL && executor_status.step_type == RL_TOOLS_INFERENCE_EXECUTOR_STATUS_STEP_TYPE_NATIVE;
+	this->num_healthy_executor_statii_intermediate += executor_status.OK && executor_status.source == decltype(executor_status.source)::CONTROL && executor_status.step_type == decltype(executor_status.step_type)::INTERMEDIATE;
+	this->num_non_healthy_executor_statii_intermediate += (!executor_status.OK) && executor_status.source == decltype(executor_status.source)::CONTROL && executor_status.step_type == decltype(executor_status.step_type)::INTERMEDIATE;
+	this->num_healthy_executor_statii_native += executor_status.OK && executor_status.source == decltype(executor_status.source)::CONTROL && executor_status.step_type == decltype(executor_status.step_type)::NATIVE;
+	this->num_non_healthy_executor_statii_native += (!executor_status.OK) && executor_status.source == decltype(executor_status.source)::CONTROL && executor_status.step_type == decltype(executor_status.step_type)::NATIVE;
 }
 
 int Raptor::task_spawn(int argc, char *argv[])
@@ -803,7 +895,7 @@ int Raptor::print_status()
 	perf_print_counter(_loop_perf);
 	perf_print_counter(_loop_interval_perf);
 	perf_print_counter(_loop_interval_policy_perf);
-	PX4_INFO_RAW("Checkpoint: %s\n", rl_tools_inference_applications_l2f_checkpoint_name());
+	PX4_INFO_RAW("Checkpoint: %s\n", checkpoint_name);
 	return 0;
 }
 

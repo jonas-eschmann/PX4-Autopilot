@@ -1,7 +1,5 @@
 #pragma once
 
-#include <rl_tools/inference/applications/l2f/c_interface.h>
-
 #include <px4_platform_common/defines.h>
 #include <px4_platform_common/module.h>
 #include <px4_platform_common/module_params.h>
@@ -30,6 +28,33 @@
 #include <uORB/topics/vehicle_control_mode.h>
 #include <uORB/topics/arming_check_request.h>
 #include <uORB/topics/arming_check_reply.h>
+#undef OK
+
+#ifdef __PX4_POSIX
+#include <rl_tools/operations/cpu.h>
+#else
+#include <rl_tools/operations/arm.h>
+#endif
+
+#include <rl_tools/nn/layers/standardize/operations_generic.h>
+#include <rl_tools/nn/layers/dense/operations_arm/opt.h>
+#include <rl_tools/nn/layers/sample_and_squash/operations_generic.h>
+#include <rl_tools/nn/layers/gru/operations_generic.h>
+#include <rl_tools/nn_models/mlp/operations_generic.h>
+#include <rl_tools/nn_models/sequential/operations_generic.h>
+
+#include <rl_tools/inference/executor/executor.h>
+#include <rl_tools/inference/applications/l2f/l2f.h>
+
+#include "blob/policy.h"
+
+#include <rl_tools/persist/backends/tar/operations_posix.h>
+#include <rl_tools/nn/optimizers/adam/instance/persist.h>
+#include <rl_tools/nn/layers/gru/persist.h>
+#include <rl_tools/nn/layers/dense/persist.h>
+#include <rl_tools/nn_models/sequential/persist.h>
+
+namespace rlt = rl_tools;
 
 
 
@@ -55,7 +80,14 @@ public:
 	int print_status() override;
 
 private:
-	using TI = size_t;
+	#ifdef __PX4_POSIX
+		using DEVICE = rlt::devices::DefaultCPU;
+	#else
+		using DEV_SPEC = rlt::devices::DefaultARMSpecification;
+		using DEVICE = rlt::devices::arm::OPT<DEV_SPEC>;
+	#endif
+	using TI = typename DEVICE::index_t;
+	using RNG = DEVICE::SPEC::RANDOM::ENGINE<>;
 	using T = float;
 	static constexpr uint64_t EXT_COMPONENT_REQUEST_ID = 1337;
 	enum class TestObservationMode: TI{
@@ -65,6 +97,8 @@ private:
 		POSITION = 3,
 		ACTION_HISTORY = 4,
 	};
+	DEVICE device;
+	RNG rng;
 	// static constexpr TestObservationMode TEST_OBSERVATION_MODE = TestObservationMode::ANGULAR_VELOCITY;
 	static constexpr TestObservationMode TEST_OBSERVATION_MODE = TestObservationMode::ACTION_HISTORY;
 	hrt_abstime init_time;
@@ -87,8 +121,8 @@ private:
 		return a < b ? a : b;
 	}
 
-	T max_position_error = 0.5; // min(rl_tools::checkpoint::meta::environment::parameters::mdp::init::max_position, rl_tools::checkpoint::meta::environment::parameters::mdp::termination::position_threshold);
-	T max_velocity_error = 1.0; // min(rl_tools::checkpoint::meta::environment::parameters::mdp::init::max_linear_velocity, rl_tools::checkpoint::meta::environment::parameters::mdp::termination::linear_velocity_threshold);
+	T max_position_error = 0.5;
+	T max_velocity_error = 1.0;
 
 	void Run() override;
 
@@ -147,17 +181,60 @@ private:
 	perf_counter_t	_loop_interval_perf{perf_alloc(PC_INTERVAL, MODULE_NAME": interval")};
 	perf_counter_t	_loop_interval_policy_perf{perf_alloc(PC_INTERVAL, MODULE_NAME": interval_policy")};
 
-	// using DEV_SPEC = rlt::devices::DefaultARMSpecification;
-	// // using DEVICE = rl_tools::devices::arm::DSP<DEV_SPEC>;
-	// using DEVICE = rlt::devices::arm::OPT<DEV_SPEC>;
-	// DEVICE device;
-	// DEVICE::SPEC::RANDOM::ENGINE<> rng;
-	// using ACTOR_TYPE_ORIGINAL = rlt::checkpoint::actor::TYPE;
-	// static constexpr TI BATCH_SIZE = 1;
-	// using ACTOR_TYPE = ACTOR_TYPE_ORIGINAL::template CHANGE_BATCH_SIZE<TI, BATCH_SIZE>;
+	struct EXECUTOR_CONFIG{
+		static constexpr TI ACTION_HISTORY_LENGTH = 1;
+		static constexpr TI CONTROL_INTERVAL_INTERMEDIATE_NS = 2.5 * 1000 * 1000; // Inference is at 500hz
+		static constexpr TI CONTROL_INTERVAL_NATIVE_NS = 10 * 1000 * 1000; // Training is 100hz
+		static constexpr TI TIMING_STATS_NUM_STEPS = 100;
+		static constexpr bool FORCE_SYNC_INTERMEDIATE = true;
+		static constexpr bool FORCE_SYNC_NATIVE_RUNTIME = true; //
+		static constexpr TI FORCE_SYNC_NATIVE = 4;
+		static constexpr bool DYNAMIC_ALLOCATION = false;
+
+		using ACTOR_TYPE_ORIGINAL = rlt::checkpoint::actor::TYPE;
+		using POLICY_TEST = rlt::checkpoint::actor::TYPE::template CHANGE_BATCH_SIZE<TI, 1>::template CHANGE_SEQUENCE_LENGTH<TI, 1>;
+		using POLICY_BATCH_SIZE = ACTOR_TYPE_ORIGINAL::template CHANGE_BATCH_SIZE<TI, 1>;
+		using POLICY = POLICY_BATCH_SIZE::template CHANGE_CAPABILITY<rlt::nn::capability::Forward<false, false>>;
+		using TYPE_POLICY = typename POLICY::TYPE_POLICY;
+
+		#if defined(__PX4_POSIX)
+		// Relax warning levels for Gazebo sitl. Because Gazebo SITL runs at 250Hz IMU rate, it is not a clean multiple of the training frequency (100hz), hence if the thresholds are set too strict, warnings will be triggered all the time. Generally, Raptor is quite robuts agains control frequency deviations.
+		struct WARNING_LEVELS: rlt::inference::executor::WarningLevelsDefault<TYPE_POLICY>{
+			using T = typename TYPE_POLICY::DEFAULT;
+			static constexpr T INTERMEDIATE_TIMING_JITTER_HIGH_THRESHOLD_NS = 2.0;
+			static constexpr T INTERMEDIATE_TIMING_JITTER_LOW_THRESHOLD_NS = 0.5;
+			static constexpr T INTERMEDIATE_TIMING_BIAS_HIGH_THRESHOLD = 2.0;
+			static constexpr T INTERMEDIATE_TIMING_BIAS_LOW_THRESHOLD = 0.5;
+			static constexpr T NATIVE_TIMING_JITTER_HIGH_THRESHOLD_NS = 2.0;
+			static constexpr T NATIVE_TIMING_JITTER_LOW_THRESHOLD_NS = 0.5;
+			static constexpr T NATIVE_TIMING_BIAS_HIGH_THRESHOLD = 2.0;
+			static constexpr T NATIVE_TIMING_BIAS_LOW_THRESHOLD = 0.5;
+		};
+		#else
+		using WARNING_LEVELS = rlt::inference::executor::WarningLevelsDefault<TYPE_POLICY>;
+		#endif
+		using TIMESTAMP = hrt_abstime;
+		static constexpr TI OUTPUT_DIM = 4;
+		static constexpr TI TEST_SEQUENCE_LENGTH_ACTUAL = 5;
+		static constexpr TI TEST_BATCH_SIZE_ACTUAL = 2;
+
+		using EXECUTOR_SPEC = rl_tools::inference::applications::l2f::Specification<TYPE_POLICY, TI, TIMESTAMP, ACTION_HISTORY_LENGTH, OUTPUT_DIM, POLICY, CONTROL_INTERVAL_INTERMEDIATE_NS, CONTROL_INTERVAL_NATIVE_NS, FORCE_SYNC_INTERMEDIATE, FORCE_SYNC_NATIVE, FORCE_SYNC_NATIVE_RUNTIME, WARNING_LEVELS, DYNAMIC_ALLOCATION>;
+		using EXECUTOR_STATUS = rlt::inference::executor::Status<EXECUTOR_SPEC::EXECUTOR_SPEC>;
+	};
+	using EXECUTOR_SPEC = EXECUTOR_CONFIG::EXECUTOR_SPEC;
+	rl_tools::inference::applications::L2F<EXECUTOR_SPEC> executor;
+	EXECUTOR_CONFIG::POLICY policy;
+	static constexpr TI CHECKPOINT_NAME_LENGTH = 100;
+	char checkpoint_name[CHECKPOINT_NAME_LENGTH] = "n/a";
+
+	#ifdef MC_RAPTOR_EMBED_POLICY
+	bool test_policy();
+	#else
+	bool test_policy(FILE *f, TI input_offset, TI output_offset);
+	#endif
 
 	void reset();
-	void observe(RLtoolsInferenceApplicationsL2FObservation& observation, TestObservationMode mode);
+	void observe(rl_tools::inference::applications::l2f::Observation<EXECUTOR_SPEC>& observation, TestObservationMode mode);
 
 	static constexpr bool REMAP_FROM_CRAZYFLIE = true; // Policy (Crazyflie assignment) => Quadrotor (PX4 Quadrotor X assignment) PX4 SIH assumes the Quadrotor X configuration, which assumes different rotor positions than the crazyflie mapping (from crazyflie outputs to PX4): 1=>1, 2=>4, 3=>2, 4=>3
 	// controller state
@@ -170,14 +247,14 @@ private:
 
 	TI num_statii;
 	TI num_healthy_executor_statii_intermediate, num_non_healthy_executor_statii_intermediate, num_healthy_executor_statii_native, num_non_healthy_executor_statii_native;
-	RLtoolsInferenceExecutorStatus last_intermediate_status, last_native_status;
+	EXECUTOR_CONFIG::EXECUTOR_STATUS last_intermediate_status, last_native_status;
 	bool last_intermediate_status_set, last_native_status_set;
 
 	TI policy_frequency_check_counter;
 	hrt_abstime timestamp_last_policy_frequency_check;
 	bool timestamp_last_policy_frequency_check_set = false;
 
-	float previous_action[RL_TOOLS_INTERFACE_APPLICATIONS_L2F_ACTION_DIM];
+	float previous_action[EXECUTOR_SPEC::OUTPUT_DIM];
 
 	DEFINE_PARAMETERS(
 		(ParamInt<px4::params::IMU_GYRO_RATEMAX>) _param_imu_gyro_ratemax,
@@ -185,4 +262,5 @@ private:
 	)
 
 	void updateArmingCheckReply(bool active);
+
 };
