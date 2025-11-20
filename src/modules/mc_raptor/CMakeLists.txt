@@ -12,7 +12,6 @@ px4_add_module(
 		-DARM_MATH_LOOPUNROLL
 	SRCS
 		mc_raptor.cpp
-		rl_tools_adapter.cpp
 	MODULE_CONFIG
 		module.yaml
 	DEPENDS
