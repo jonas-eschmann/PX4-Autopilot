@@ -390,6 +390,7 @@ void Raptor::Run(){
 			strncpy(unregister_ext_component.name, "RAPTOR", sizeof(unregister_ext_component.name) - 1);
 			unregister_ext_component.arming_check_id = ext_component_arming_check_id;
 			unregister_ext_component.mode_id = ext_component_mode_id;
+			unregister_ext_component.mode_executor_id = -1;
 			_unregister_ext_component_pub.publish(unregister_ext_component);
 		}
 		ScheduleClear();
@@ -420,9 +421,6 @@ void Raptor::Run(){
 		flightmode_state = FlightModeState::CONFIGURED;
 		PX4_INFO("Raptor mode configuration sent");
 	}
-
-
-
 
 
 	perf_count(_loop_interval_perf);
@@ -476,11 +474,6 @@ void Raptor::Run(){
 			_trajectory_setpoint = temp_trajectory_setpoint;
 		}
 	}
-
-	// if(_manual_control_input_sub.update(&_manual_control_input)) {
-	// 	timestamp_last_manual_control_input_set = true;
-	// 	timestamp_last_manual_control_input = current_time;
-	// }
 
 	constexpr bool PUBLISH_NON_COMPLETE_STATUS = true;
 	if(!angular_velocity_update){
@@ -752,7 +745,7 @@ int Raptor::print_usage(const char *reason)
 	PRINT_MODULE_DESCRIPTION(
 		R"DESCR_STR(
 ### Description
-RLtools Policy
+RAPTOR Policy Flight Mode
 
 )DESCR_STR");
 

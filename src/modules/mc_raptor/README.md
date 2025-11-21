@@ -7,7 +7,7 @@ Build PX4 SITL with Raptor, disable QGC requirement, and adjust the `IMU_GYRO_RA
 make px4_sitl_raptor gz_x500
 param set NAV_DLL_ACT 0
 param set COM_DISARM_LAND -1 # When taking off in offboard the landing detector can cause mid-air disarms
-param set IMU_GYRO_RATEMAX 250
+param set IMU_GYRO_RATEMAX 250 # Just for SITL. Tested with IMU_GYRO_RATEMAX=400 on real FCUs
 param set MC_RAPTOR_ENABLE 1
 param set MC_RAPTOR_OFFB 0
 ```
