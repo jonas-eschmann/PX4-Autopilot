@@ -40,15 +40,17 @@ Raptor::~Raptor()
 }
 
 #ifdef MC_RAPTOR_EMBED_POLICY
+bool Raptor::test_policy(){
 #else
 bool Raptor::test_policy(FILE *f, TI input_offset, TI output_offset){
 #endif
 	using namespace rl_tools::inference::applications::l2f;
 #ifndef RL_TOOLS_DISABLE_TEST
 	// This tests the policy using a known input output pair that has been saved into the policy checkpoint to verify that it has been loaded correctly
-	EXECUTOR_CONFIG::POLICY_TEST::template Buffer<false> buffers_test;
-	EXECUTOR_CONFIG::POLICY_TEST::State<false> policy_state_test;
-	rl_tools::Tensor<rl_tools::tensor::Specification<EXECUTOR_CONFIG::TYPE_POLICY::DEFAULT, TI, rl_tools::tensor::Shape<TI, 1, decltype(policy)::OUTPUT_SHAPE::LAST>, false>> test_output;
+	using POLICY = EXECUTOR_CONFIG::POLICY_TEST;
+	POLICY::template Buffer<false> buffers_test;
+	POLICY::State<false> policy_state_test;
+	rl_tools::Tensor<rl_tools::tensor::Specification<EXECUTOR_CONFIG::TYPE_POLICY::DEFAULT, TI, rl_tools::tensor::Shape<TI, 1, POLICY::OUTPUT_SHAPE::LAST>, false>> test_output;
 	rl_tools::Mode<rl_tools::mode::Evaluation<>> mode;
 	using EXAMPLE_INPUT_SPEC = rl_tools::checkpoint::example::input::SPEC;
 	using EXAMPLE_OUTPUT_SPEC = rl_tools::checkpoint::example::output::SPEC;
@@ -59,10 +61,10 @@ bool Raptor::test_policy(FILE *f, TI input_offset, TI output_offset){
 		rl_tools::reset(device, policy, policy_state_test, rng);
 		for(TI step_i = 0; step_i < EXECUTOR_CONFIG::TEST_SEQUENCE_LENGTH_ACTUAL; step_i++){
 #ifdef MC_RAPTOR_EMBED_POLICY
-			const auto step_input = rl_tools::view(device, rl_tools::checkpoint::example::input::container, step_i);
-			const auto batch_input = rl_tools::view_range(device, step_input, batch_i);
-			const auto step_output_target = rl_tools::view_range(device, rl_tools::checkpoint::example::output::container, step_i);
-			const auto batch_output_target = rl_tools::view_range(device, step_output_target, batch_i);
+			const auto step_input = rl_tools::view(device, MC_RAPTOR_EXAMPLE_NAMESPACE::input::container, step_i);
+			const auto batch_input = rl_tools::view_range(device, step_input, batch_i, rlt::tensor::ViewSpec<0, 1>{});
+			const auto step_output_target = rl_tools::view(device, MC_RAPTOR_EXAMPLE_NAMESPACE::output::container, step_i);
+			const auto batch_output_target = rl_tools::view_range(device, step_output_target, batch_i, rlt::tensor::ViewSpec<0, 1>{});
 #else
 			rl_tools::Tensor<rl_tools::tensor::Specification<EXECUTOR_CONFIG::TYPE_POLICY::DEFAULT, TI, rl_tools::tensor::Shape<TI, 1, EXAMPLE_INPUT_SPEC::SHAPE::LAST>, false>> batch_input;
 			rl_tools::Tensor<rl_tools::tensor::Specification<EXECUTOR_CONFIG::TYPE_POLICY::DEFAULT, TI, rl_tools::tensor::Shape<TI, 1, EXAMPLE_OUTPUT_SPEC::SHAPE::LAST>, false>> batch_output_target;
@@ -109,7 +111,6 @@ bool Raptor::test_policy(FILE *f, TI input_offset, TI output_offset){
 bool Raptor::init()
 {
 	this->init_time = hrt_absolute_time();
-	// ScheduleOnInterval(500_us); // 2000 us interval, 200 Hz rate
 	if (!_vehicle_local_position_sub.registerCallback()) {
 		PX4_ERR("vehicle_local_position_sub callback registration failed");
 		return false;
@@ -127,7 +128,7 @@ bool Raptor::init()
 		return false;
 	}
 
-	#ifndef MC_RAPTOR_EMBED_POLICY
+#ifndef MC_RAPTOR_EMBED_POLICY
 #ifdef __PX4_POSIX
 	const char *path = "raptor/policy.tar";
 #else
@@ -206,12 +207,12 @@ bool Raptor::init()
 		PX4_INFO("File %s does not exist", path);
 		return false;
 	}
-	#else
+#else
 		if(!test_policy()){
 			PX4_ERR("Checkpoint test failed");
 			return false;
 		}
-	#endif
+#endif
 
 
 	register_ext_component_request_s register_ext_component_request{};

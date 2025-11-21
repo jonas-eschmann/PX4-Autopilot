@@ -56,6 +56,10 @@
 
 namespace rlt = rl_tools;
 
+#define MC_RAPTOR_POLICY_NAMESPACE rlt::checkpoint::actor
+#define MC_RAPTOR_EXAMPLE_NAMESPACE rlt::checkpoint::example
+#define MC_RAPTOR_EMBED_POLICY
+
 
 
 using namespace time_literals;
@@ -182,10 +186,14 @@ private:
 		static constexpr TI FORCE_SYNC_NATIVE = 4;
 		static constexpr bool DYNAMIC_ALLOCATION = false;
 
-		using ACTOR_TYPE_ORIGINAL = rlt::checkpoint::actor::TYPE;
-		using POLICY_TEST = rlt::checkpoint::actor::TYPE::template CHANGE_BATCH_SIZE<TI, 1>::template CHANGE_SEQUENCE_LENGTH<TI, 1>;
+		using ACTOR_TYPE_ORIGINAL = MC_RAPTOR_POLICY_NAMESPACE ::TYPE;
+		using POLICY_TEST = MC_RAPTOR_POLICY_NAMESPACE ::TYPE::template CHANGE_BATCH_SIZE<TI, 1>::template CHANGE_SEQUENCE_LENGTH<TI, 1>;
 		using POLICY_BATCH_SIZE = ACTOR_TYPE_ORIGINAL::template CHANGE_BATCH_SIZE<TI, 1>;
+#ifdef MC_RAPTOR_EMBED_POLICY
+		using POLICY = POLICY_BATCH_SIZE;
+#else
 		using POLICY = POLICY_BATCH_SIZE::template CHANGE_CAPABILITY<rlt::nn::capability::Forward<false, false>>;
+#endif
 		using TYPE_POLICY = typename POLICY::TYPE_POLICY;
 
 		#if defined(__PX4_POSIX)
@@ -214,15 +222,19 @@ private:
 	};
 	using EXECUTOR_SPEC = EXECUTOR_CONFIG::EXECUTOR_SPEC;
 	rl_tools::inference::applications::L2F<EXECUTOR_SPEC> executor;
+#ifdef MC_RAPTOR_EMBED_POLICY
+	const decltype(MC_RAPTOR_POLICY_NAMESPACE ::module)& policy = MC_RAPTOR_POLICY_NAMESPACE::module;
+#else
 	EXECUTOR_CONFIG::POLICY policy;
+#endif
 	static constexpr TI CHECKPOINT_NAME_LENGTH = 100;
 	char checkpoint_name[CHECKPOINT_NAME_LENGTH] = "n/a";
 
-	#ifdef MC_RAPTOR_EMBED_POLICY
+#ifdef MC_RAPTOR_EMBED_POLICY
 	bool test_policy();
-	#else
+#else
 	bool test_policy(FILE *f, TI input_offset, TI output_offset);
-	#endif
+#endif
 
 	void reset();
 	void observe(rl_tools::inference::applications::l2f::Observation<EXECUTOR_SPEC>& observation);
