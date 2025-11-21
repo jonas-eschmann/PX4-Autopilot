@@ -59,7 +59,7 @@ namespace rlt = rl_tools;
 #define MC_RAPTOR_POLICY_NAMESPACE rlt::checkpoint::actor
 #define MC_RAPTOR_EXAMPLE_NAMESPACE rlt::checkpoint::example
 #define MC_RAPTOR_META_NAMESPACE rlt::checkpoint::meta
-#define MC_RAPTOR_EMBED_POLICY
+// #define MC_RAPTOR_EMBED_POLICY // you can use this to directly embed the policy into the firmware instead of loading it from the sd card. To fit into the flash you might need to disable some unnecessary features in the .px4board config.
 
 
 
