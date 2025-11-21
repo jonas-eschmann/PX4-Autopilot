@@ -25,8 +25,6 @@ Raptor::Raptor(): ModuleParams(nullptr), ScheduledWorkItem(MODULE_NAME, px4::wq_
 	_tune_control_pub.advertise();
 }
 void Raptor::reset(){
-	this->visual_odometry_stale_counter = 0;
-	this->timestamp_last_visual_odometry_stale_set = false;
 	for(TI action_i=0; action_i < EXECUTOR_SPEC::OUTPUT_DIM; action_i++){
 		this->previous_action[action_i] = RESET_PREVIOUS_ACTION_VALUE;
 	}
@@ -113,10 +111,6 @@ bool Raptor::init()
 	this->init_time = hrt_absolute_time();
 	if (!_vehicle_local_position_sub.registerCallback()) {
 		PX4_ERR("vehicle_local_position_sub callback registration failed");
-		return false;
-	}
-	if (!_vehicle_visual_odometry_sub.registerCallback()) {
-		PX4_ERR("vehicle_visual_odometry_sub callback registration failed");
 		return false;
 	}
 	if (!_vehicle_angular_velocity_sub.registerCallback()) {
@@ -298,13 +292,6 @@ void Raptor::observe(rl_tools::inference::applications::l2f::Observation<EXECUTO
 
 	{ // Orientation
 		// FRD to FLU
-		// Validating Julia code:
-		// using Rotations
-		// FRD2FLU = [1 0 0; 0 -1 0; 0 0 -1]
-		// q = rand(UnitQuaternion)
-		// q2 = UnitQuaternion(q.q.s, q.q.v1, -q.q.v2, -q.q.v3)
-		// diff = q2 - FRD2FLU * q * transpose(FRD2FLU)
-		// @assert sum(abs.(diff)) < 1e-10
 		T q_target[4];
 		q_target[0] = cosf(0.5f * _trajectory_setpoint.yaw); // minus because the setpoint yaw is in NED
 		q_target[1] = 0;
@@ -395,7 +382,6 @@ void Raptor::updateArmingCheckReply(bool active){
 void Raptor::Run(){
 	if (should_exit()) {
 		_vehicle_local_position_sub.unregisterCallback();
-		_vehicle_visual_odometry_sub.unregisterCallback();
 		_vehicle_angular_velocity_sub.unregisterCallback();
 		_vehicle_attitude_sub.unregisterCallback();
 		if(flightmode_state >= FlightModeState::REGISTERED){
@@ -451,25 +437,6 @@ void Raptor::Run(){
 	status.substep = 0;
 	status.active = false;
 	status.control_interval = NAN;
-	status.visual_odometry_stale_counter = this->visual_odometry_stale_counter;
-	status.visual_odometry_age = 0;
-	status.visual_odometry_dt_mean = 0;
-	status.visual_odometry_dt_std = 0;
-	for(TI odometry_dt_i = 0; odometry_dt_i < raptor_status_s::NUM_VISUAL_ODOMETRY_DT_MAX; odometry_dt_i++){
-		status.visual_odometry_dt_max[odometry_dt_i] = 0;
-	}
-
-	if(Raptor::ODOMETRY_SOURCE == Raptor::OdometrySource::LOCAL_POSITION){
-		status.odometry_source = raptor_status_s::ODOMETRY_SOURCE_LOCAL_POSITION;
-	}
-	else{
-		if(Raptor::ODOMETRY_SOURCE == Raptor::OdometrySource::VISUAL_ODOMETRY){
-			status.odometry_source = raptor_status_s::ODOMETRY_SOURCE_VISUAL_ODOMETRY;
-		}
-		else{
-			status.odometry_source = raptor_status_s::ODOMETRY_SOURCE_UNKNOWN;
-		}
-	}
 
 	bool angular_velocity_update = false;
 	status.subscription_update_angular_velocity = _vehicle_angular_velocity_sub.update(&_vehicle_angular_velocity);
@@ -485,37 +452,6 @@ void Raptor::Run(){
 		timestamp_last_local_position = current_time;
 		timestamp_last_local_position_set = true;
 	}
-
-	status.subscription_update_visual_odometry = _vehicle_visual_odometry_sub.update(&_vehicle_visual_odometry);
-	if(status.subscription_update_visual_odometry){
-		if(timestamp_last_visual_odometry_set){
-			odometry_dts[odometry_dt_index] = current_time - timestamp_last_visual_odometry;
-			odometry_dt_index = (odometry_dt_index + 1) % NUM_ODOMETRY_DTS;
-			if(odometry_dt_index == 0){
-				odometry_dts_full = true;
-			}
-		}
-		timestamp_last_visual_odometry = current_time;
-		timestamp_last_visual_odometry_set = true;
-	}
-	for(TI odometry_dt_i = 0; odometry_dt_i < (odometry_dts_full ? NUM_ODOMETRY_DTS : odometry_dt_index); odometry_dt_i++){
-		auto value = odometry_dts[odometry_dt_i];
-		status.visual_odometry_dt_mean += value;
-		status.visual_odometry_dt_std += value * value;
-		TI max_index = 0;
-		bool max_index_set = false;
-		for(TI odometry_dt_max_i = 0; odometry_dt_max_i < raptor_status_s::NUM_VISUAL_ODOMETRY_DT_MAX; odometry_dt_max_i++){
-			if(value > status.visual_odometry_dt_max[odometry_dt_max_i]){
-				max_index = odometry_dt_max_i;
-				max_index_set = true;
-			}
-		}
-		if(max_index_set){
-			status.visual_odometry_dt_max[max_index] = value;
-		}
-	}
-	status.visual_odometry_dt_mean /= NUM_ODOMETRY_DTS;
-	status.visual_odometry_dt_std = sqrt(status.visual_odometry_dt_std / NUM_ODOMETRY_DTS - status.visual_odometry_dt_mean * status.visual_odometry_dt_mean);
 
 	status.subscription_update_attitude = _vehicle_attitude_sub.update(&_vehicle_attitude);
 	if(status.subscription_update_attitude){
@@ -555,8 +491,7 @@ void Raptor::Run(){
 		return;
 	}
 
-	bool timestamp_last_odometry_set = (Raptor::ODOMETRY_SOURCE == Raptor::OdometrySource::LOCAL_POSITION && timestamp_last_local_position_set) || (Raptor::ODOMETRY_SOURCE == Raptor::OdometrySource::VISUAL_ODOMETRY && timestamp_last_visual_odometry_set);
-	if(!timestamp_last_angular_velocity_set || !timestamp_last_odometry_set || !timestamp_last_attitude_set){
+	if(!timestamp_last_angular_velocity_set || !timestamp_last_local_position_set || !timestamp_last_attitude_set){
 		status.exit_reason = raptor_status_s::EXIT_REASON_NOT_ALL_OBSERVATIONS_SET;
 		if constexpr(PUBLISH_NON_COMPLETE_STATUS){
 			_raptor_status_pub.publish(status);
@@ -576,113 +511,25 @@ void Raptor::Run(){
 		updateArmingCheckReply(false);
 		return;
 	}
-	if(Raptor::ODOMETRY_SOURCE == Raptor::OdometrySource::LOCAL_POSITION){
-		if((current_time - timestamp_last_local_position) > OBSERVATION_TIMEOUT_LOCAL_POSITION){
-			status.exit_reason = raptor_status_s::EXIT_REASON_LOCAL_POSITION_STALE;
-			if constexpr(PUBLISH_NON_COMPLETE_STATUS){
-				_raptor_status_pub.publish(status);
-			}
-			if(!timeout_message_sent){
-				PX4_ERR("local position timeout");
-				timeout_message_sent = true;
-			}
-			updateArmingCheckReply(false);
-			return;
+	if((current_time - timestamp_last_local_position) > OBSERVATION_TIMEOUT_LOCAL_POSITION){
+		status.exit_reason = raptor_status_s::EXIT_REASON_LOCAL_POSITION_STALE;
+		if constexpr(PUBLISH_NON_COMPLETE_STATUS){
+			_raptor_status_pub.publish(status);
 		}
-		else{
-			position[0] = _vehicle_local_position.x;
-			position[1] = _vehicle_local_position.y;
-			position[2] = _vehicle_local_position.z;
-			linear_velocity[0] = _vehicle_local_position.vx;
-			linear_velocity[1] = _vehicle_local_position.vy;
-			linear_velocity[2] = _vehicle_local_position.vz;
+		if(!timeout_message_sent){
+			PX4_ERR("local position timeout");
+			timeout_message_sent = true;
 		}
+		updateArmingCheckReply(false);
+		return;
 	}
-	{
-		status.visual_odometry_age = current_time - timestamp_last_visual_odometry;
-		if((current_time - timestamp_last_visual_odometry) > OBSERVATION_TIMEOUT_VISUAL_ODOMETRY){
-			if(!timestamp_last_visual_odometry_stale_set || timestamp_last_visual_odometry_stale != timestamp_last_visual_odometry){
-				// rising edge
-				visual_odometry_stale_counter++;
-				tune_control_s tune_control;
-				tune_control.timestamp = current_time;
-				tune_control.tune_id = 0;
-				tune_control.volume = 100; //tune_control_s::VOLUME_LEVEL_DEFAULT;
-				tune_control.tune_override = true;
-				tune_control.frequency = 1000;
-				tune_control.duration = 10000;
-				_tune_control_pub.publish(tune_control);
-				PX4_WARN("Visual odometry stale: begin");
-			}
-			timestamp_last_visual_odometry_stale = timestamp_last_visual_odometry;
-			timestamp_last_visual_odometry_stale_set = true;
-			if(Raptor::ODOMETRY_SOURCE == Raptor::OdometrySource::VISUAL_ODOMETRY){
-				status.exit_reason = raptor_status_s::EXIT_REASON_VISUAL_ODOMETRY_STALE;
-				if constexpr(PUBLISH_NON_COMPLETE_STATUS){
-					_raptor_status_pub.publish(status);
-				}
-				if(!timeout_message_sent){
-					PX4_ERR("Visual odometry timeout");
-					timeout_message_sent = true;
-				}
-				updateArmingCheckReply(false);
-				return;
-			}
-		}
-		else{
-			if(timestamp_last_visual_odometry_stale_set){
-				// falling edge
-				auto diff = current_time - timestamp_last_visual_odometry_stale;
-				tune_control_s tune_control;
-				tune_control.timestamp = current_time;
-				tune_control.tune_id = 0;
-				tune_control.volume = 100; //tune_control_s::VOLUME_LEVEL_DEFAULT;
-				tune_control.tune_override = true;
-				tune_control.frequency = 2000;
-				tune_control.duration = min(10000000, diff);
-				_tune_control_pub.publish(tune_control);
-				PX4_WARN("Visual odometry stale: end %llu uS", (unsigned long long)diff);
-			}
-			timestamp_last_visual_odometry_stale_set = false;
-			if(Raptor::ODOMETRY_SOURCE == Raptor::OdometrySource::VISUAL_ODOMETRY){
-				if(_vehicle_visual_odometry.pose_frame != vehicle_odometry_s::POSE_FRAME_NED){
-					status.exit_reason = raptor_status_s::EXIT_REASON_VISUAL_ODOMETRY_WRONG_FRAME;
-					if constexpr(PUBLISH_NON_COMPLETE_STATUS){
-						_raptor_status_pub.publish(status);
-					}
-					if(!timeout_message_sent){
-						PX4_ERR("Visual odometry wrong frame (should be NED)");
-						timeout_message_sent = true;
-					}
-					updateArmingCheckReply(false);
-					return;
-				}
-				else{
-					bool position_nan = std::isnan(_vehicle_visual_odometry.position[0]) || std::isnan(_vehicle_visual_odometry.position[1]) || std::isnan(_vehicle_visual_odometry.position[2]);
-					bool velocity_nan = std::isnan(_vehicle_visual_odometry.velocity[0]) || std::isnan(_vehicle_visual_odometry.velocity[1]) || std::isnan(_vehicle_visual_odometry.velocity[2]);
-					if(position_nan || velocity_nan){
-						status.exit_reason = raptor_status_s::EXIT_REASON_VISUAL_ODOMETRY_NAN;
-						if constexpr(PUBLISH_NON_COMPLETE_STATUS){
-							_raptor_status_pub.publish(status);
-						}
-						if(!timeout_message_sent){
-							PX4_ERR("Visual odometry contains NANs in position or velocity");
-							timeout_message_sent = true;
-						}
-						updateArmingCheckReply(false);
-						return;
-					}
-					else{
-						position[0] = _vehicle_visual_odometry.position[0];
-						position[1] = _vehicle_visual_odometry.position[1];
-						position[2] = _vehicle_visual_odometry.position[2];
-						linear_velocity[0] = _vehicle_visual_odometry.velocity[0];
-						linear_velocity[1] = _vehicle_visual_odometry.velocity[1];
-						linear_velocity[2] = _vehicle_visual_odometry.velocity[2];
-					}
-				}
-			}
-		}
+	else{
+		position[0] = _vehicle_local_position.x;
+		position[1] = _vehicle_local_position.y;
+		position[2] = _vehicle_local_position.z;
+		linear_velocity[0] = _vehicle_local_position.vx;
+		linear_velocity[1] = _vehicle_local_position.vy;
+		linear_velocity[2] = _vehicle_local_position.vz;
 	}
 	// position and linear_velocity are guaranteed to be set after this point
 

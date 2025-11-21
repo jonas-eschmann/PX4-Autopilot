@@ -101,17 +101,9 @@ private:
 	// node constants
 	static constexpr TI OBSERVATION_TIMEOUT_ANGULAR_VELOCITY = 10 * 1000;
 	static constexpr TI OBSERVATION_TIMEOUT_LOCAL_POSITION = 100 * 1000;
-	static constexpr TI OBSERVATION_TIMEOUT_VISUAL_ODOMETRY = 100 * 1000;
 	static constexpr TI OBSERVATION_TIMEOUT_ATTITUDE = 50 * 1000;
 	static constexpr TI TRAJECTORY_SETPOINT_TIMEOUT = 100 * 1000;
 	static constexpr T RESET_PREVIOUS_ACTION_VALUE = 0; // -1 to 1
-
-	enum class OdometrySource: TI{
-		LOCAL_POSITION = 0,
-		VISUAL_ODOMETRY = 1,
-	};
-	// static constexpr OdometrySource ODOMETRY_SOURCE = OdometrySource::VISUAL_ODOMETRY;
-	static constexpr OdometrySource ODOMETRY_SOURCE = OdometrySource::LOCAL_POSITION;
 
 	T min(T a, T b) {
 		return a < b ? a : b;
@@ -134,30 +126,20 @@ private:
 
 	// node state
 	vehicle_local_position_s _vehicle_local_position{};
-	vehicle_odometry_s _vehicle_visual_odometry{};
 	vehicle_angular_velocity_s _vehicle_angular_velocity{};
 	vehicle_attitude_s _vehicle_attitude{};
 	vehicle_status_s _vehicle_status{};
 	trajectory_setpoint_s _trajectory_setpoint{};
-	hrt_abstime timestamp_last_local_position, timestamp_last_visual_odometry, timestamp_last_visual_odometry_stale, timestamp_last_angular_velocity, timestamp_last_attitude, timestamp_last_trajectory_setpoint, timestamp_last_manual_control_input, timestamp_last_vehicle_status;
-	bool timestamp_last_local_position_set = false, timestamp_last_visual_odometry_set = false, timestamp_last_visual_odometry_stale_set = false, timestamp_last_angular_velocity_set = false, timestamp_last_attitude_set = false, timestamp_last_trajectory_setpoint_set = false, timestamp_last_manual_control_input_set = false, timestamp_last_vehicle_status_set = false;
+	hrt_abstime timestamp_last_local_position, timestamp_last_angular_velocity, timestamp_last_attitude, timestamp_last_trajectory_setpoint, timestamp_last_manual_control_input, timestamp_last_vehicle_status;
+	bool timestamp_last_local_position_set = false, timestamp_last_angular_velocity_set = false, timestamp_last_attitude_set = false, timestamp_last_trajectory_setpoint_set = false, timestamp_last_manual_control_input_set = false, timestamp_last_vehicle_status_set = false;
 	bool timeout_message_sent = false;
 	bool previous_trajectory_setpoint_stale = false;
 	bool previous_active = false;
 
-	static constexpr TI NUM_ODOMETRY_DTS = 1000;
-	TI odometry_dts[NUM_ODOMETRY_DTS];
-	TI odometry_dt_index = 0;
-	bool odometry_dts_full = false;
-	TI visual_odometry_stale_counter = 0;
-
-
 	T position[3];
 	T linear_velocity[3];
 
-	// uORB::Subscription _rl_tools_command_sub{ORB_ID(rl_tools_command)};
 	uORB::SubscriptionCallbackWorkItem _vehicle_local_position_sub{this, ORB_ID(vehicle_local_position)};
-	uORB::SubscriptionCallbackWorkItem _vehicle_visual_odometry_sub{this, ORB_ID(vehicle_visual_odometry)};
 	uORB::SubscriptionCallbackWorkItem _vehicle_angular_velocity_sub{this, ORB_ID(vehicle_angular_velocity)};
 	uORB::SubscriptionCallbackWorkItem _vehicle_attitude_sub{this, ORB_ID(vehicle_attitude)};
 	uORB::Subscription _register_ext_component_reply_sub{ORB_ID(register_ext_component_reply)};
