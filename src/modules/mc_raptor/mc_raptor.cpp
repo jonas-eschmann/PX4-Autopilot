@@ -174,7 +174,6 @@ bool Raptor::init()
 			if(rlt::persist::backends::tar::seek_in_metadata(device, metadata_buffer, METADATA_BUFFER_SIZE, "checkpoint_name", checkpoint_name_position, checkpoint_name_len)){
 				strncpy(checkpoint_name, metadata_buffer + checkpoint_name_position, CHECKPOINT_NAME_LENGTH);
 				checkpoint_name[checkpoint_name_len < CHECKPOINT_NAME_LENGTH ? checkpoint_name_len : CHECKPOINT_NAME_LENGTH - 1] = '\0';
-				PX4_INFO("Checkpoint name: %s", checkpoint_name);
 			}
 			else{
 				PX4_ERR("Failed to get checkpoint name from metadata");
@@ -208,12 +207,14 @@ bool Raptor::init()
 		return false;
 	}
 #else
-		PX4_INFO("Checkpoint name: %s", MC_RAPTOR_META_NAMESPACE::name);
-		if(!test_policy()){
-			PX4_ERR("Checkpoint test failed");
-			return false;
-		}
+
+	strncpy(checkpoint_name, MC_RAPTOR_META_NAMESPACE::name, CHECKPOINT_NAME_LENGTH);
+	if(!test_policy()){
+		PX4_ERR("Checkpoint test failed");
+		return false;
+	}
 #endif
+	PX4_INFO("Checkpoint name: %s", checkpoint_name);
 
 
 	register_ext_component_request_s register_ext_component_request{};
