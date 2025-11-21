@@ -52,8 +52,8 @@ bool Raptor::test_policy(FILE *f, TI input_offset, TI output_offset){
 	POLICY::State<false> policy_state_test;
 	rl_tools::Tensor<rl_tools::tensor::Specification<EXECUTOR_CONFIG::TYPE_POLICY::DEFAULT, TI, rl_tools::tensor::Shape<TI, 1, POLICY::OUTPUT_SHAPE::LAST>, false>> test_output;
 	rl_tools::Mode<rl_tools::mode::Evaluation<>> mode;
-	using EXAMPLE_INPUT_SPEC = rl_tools::checkpoint::example::input::SPEC;
-	using EXAMPLE_OUTPUT_SPEC = rl_tools::checkpoint::example::output::SPEC;
+	using EXAMPLE_INPUT_SPEC = MC_RAPTOR_EXAMPLE_NAMESPACE::input::SPEC;
+	using EXAMPLE_OUTPUT_SPEC = MC_RAPTOR_EXAMPLE_NAMESPACE::output::SPEC;
 	float acc = 0;
 	uint64_t num_values = 0;
 	rl_tools::inference::applications::l2f::Action<EXECUTOR_SPEC> action;
@@ -208,6 +208,7 @@ bool Raptor::init()
 		return false;
 	}
 #else
+		PX4_INFO("Checkpoint name: %s", MC_RAPTOR_META_NAMESPACE::name);
 		if(!test_policy()){
 			PX4_ERR("Checkpoint test failed");
 			return false;

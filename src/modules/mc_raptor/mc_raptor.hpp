@@ -58,6 +58,7 @@ namespace rlt = rl_tools;
 
 #define MC_RAPTOR_POLICY_NAMESPACE rlt::checkpoint::actor
 #define MC_RAPTOR_EXAMPLE_NAMESPACE rlt::checkpoint::example
+#define MC_RAPTOR_META_NAMESPACE rlt::checkpoint::meta
 #define MC_RAPTOR_EMBED_POLICY
 
 
