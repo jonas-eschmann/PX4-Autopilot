@@ -585,7 +585,7 @@ void Raptor::Run(){
 	if(executor_status.source != decltype(executor_status.source)::CONTROL){
 		status.exit_reason = raptor_status_s::EXIT_REASON_EXECUTOR_STATUS_SOURCE_NOT_CONTROL;
 		if constexpr(PUBLISH_NON_COMPLETE_STATUS){
-			// _raptor_status_pub.publish(status);
+			_raptor_status_pub.publish(status);
 		}
 		return;
 	}

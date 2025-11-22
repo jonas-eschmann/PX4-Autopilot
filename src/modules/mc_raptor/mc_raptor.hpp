@@ -167,8 +167,8 @@ private:
 		static constexpr TI CONTROL_INTERVAL_NATIVE_NS = 10 * 1000 * 1000; // Training is 100hz
 		static constexpr TI TIMING_STATS_NUM_STEPS = 100;
 		static constexpr bool FORCE_SYNC_INTERMEDIATE = true;
-		static constexpr bool FORCE_SYNC_NATIVE_RUNTIME = true; //
-		static constexpr TI FORCE_SYNC_NATIVE = 4;
+		static constexpr bool FORCE_SYNC_NATIVE_RUNTIME = false; //
+		static constexpr TI FORCE_SYNC_NATIVE = 2;
 		static constexpr bool DYNAMIC_ALLOCATION = false;
 
 		using ACTOR_TYPE_ORIGINAL = MC_RAPTOR_POLICY_NAMESPACE ::TYPE;
