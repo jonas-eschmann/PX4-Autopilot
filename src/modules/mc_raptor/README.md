@@ -1,7 +1,8 @@
 # RAPTOR
 
 
-## Standalone Usage (Without External Trajectory Setpoint)
+## SITL
+#### Standalone Usage (Without External Trajectory Setpoint)
 Build PX4 SITL with Raptor, disable QGC requirement, and adjust the `IMU_GYRO_RATEMAX` to match the simulation IMU rate
 ```
 make px4_sitl_raptor gz_x500
@@ -31,7 +32,7 @@ commander mode ext{RAPTOR_MODE_ID}
 ```
 
 
-## Usage with External Trajectory Setpoint
+#### Usage with External Trajectory Setpoint
 
 
 Send Lissajous setpoints via Mavlink:
@@ -40,3 +41,22 @@ pip install px4
 px4 udp:localhost:14540 track lissajous --A 2.0 --B 0.5 --duration 5 --ramp-duration 3 --takeoff 3.0
 ```
 
+
+## SIH
+```
+make px4_fmu-v6c_raptor upload
+```
+In QGroundControl:
+- Airframes => SIH Quadrotor X
+- Settings => Comm Links => Disable Pixhawk (disable automatic USB serial connection)
+```
+mavproxy.py --master /dev/serial/by-id/usb-Auterion_PX4_FMU_v6C.x_0-if00 --out udp:localhost:14550 --out udp:localhost:13337 --out udp:localhost:13338
+```
+New terminal:
+```
+./Tools/simulation/jmavsim/jmavsim_run.sh -u -p 13337 -o
+```
+New terminal (optional):
+```
+./Tools/mavlink_shell.py udp:localhost:13338
+```

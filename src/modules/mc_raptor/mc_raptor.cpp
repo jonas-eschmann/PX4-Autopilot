@@ -20,6 +20,7 @@ Raptor::Raptor(): ModuleParams(nullptr), ScheduledWorkItem(MODULE_NAME, px4::wq_
 	last_native_status_set = false;
 	policy_frequency_check_counter = 0;
 	flightmode_state = FlightModeState::UNREGISTERED;
+	can_arm = false;
 
 	_actuator_motors_pub.advertise();
 	_tune_control_pub.advertise();
@@ -352,7 +353,7 @@ void Raptor::observe(rl_tools::inference::applications::l2f::Observation<EXECUTO
 }
 
 
-void Raptor::updateArmingCheckReply(bool active){
+void Raptor::updateArmingCheckReply(){
 	if(flightmode_state == FlightModeState::CONFIGURED){
 		if (_arming_check_request_sub.updated()) {
 			arming_check_request_s arming_check_request;
@@ -363,7 +364,7 @@ void Raptor::updateArmingCheckReply(bool active){
 			arming_check_reply.registration_id = ext_component_arming_check_id;
 			arming_check_reply.health_component_index = arming_check_reply.HEALTH_COMPONENT_INDEX_NONE;
 			arming_check_reply.num_events = 0;
-			arming_check_reply.can_arm_and_run = active;
+			arming_check_reply.can_arm_and_run = can_arm;
 			arming_check_reply.mode_req_angular_velocity = true;
 			arming_check_reply.mode_req_local_position = true;
 			arming_check_reply.mode_req_attitude = true;
@@ -428,7 +429,7 @@ void Raptor::Run(){
 	perf_begin(_loop_perf);
 	hrt_abstime current_time = hrt_absolute_time();
 
-	raptor_status_s status;
+	raptor_status_s status{};
 	status.timestamp = current_time;
 	status.timestamp_sample = current_time;
 	status.exit_reason = raptor_status_s::EXIT_REASON_NONE;
@@ -440,6 +441,7 @@ void Raptor::Run(){
 	status.subscription_update_angular_velocity = _vehicle_angular_velocity_sub.update(&_vehicle_angular_velocity);
 	if(status.subscription_update_angular_velocity){
 		timestamp_last_angular_velocity = current_time;
+		status.timestamp_last_vehicle_angular_velocity = current_time;
 		timestamp_last_angular_velocity_set = true;
 		angular_velocity_update = true;
 	}
@@ -448,17 +450,20 @@ void Raptor::Run(){
 	status.subscription_update_local_position = _vehicle_local_position_sub.update(&_vehicle_local_position);
 	if(status.subscription_update_local_position){
 		timestamp_last_local_position = current_time;
+		status.timestamp_last_vehicle_local_position = current_time;
 		timestamp_last_local_position_set = true;
 	}
 
 	status.subscription_update_attitude = _vehicle_attitude_sub.update(&_vehicle_attitude);
 	if(status.subscription_update_attitude){
 		timestamp_last_attitude = current_time;
+		status.timestamp_last_vehicle_attitude = current_time;
 		timestamp_last_attitude_set = true;
 	}
 
 	trajectory_setpoint_s temp_trajectory_setpoint;
-	if(_trajectory_setpoint_sub.update(&temp_trajectory_setpoint)) {
+	status.subscription_update_trajectory_setpoint = _trajectory_setpoint_sub.update(&temp_trajectory_setpoint);
+	if(status.subscription_update_trajectory_setpoint){
 		if(
 			PX4_ISFINITE(temp_trajectory_setpoint.position[0]) &&
 			PX4_ISFINITE(temp_trajectory_setpoint.position[1]) &&
@@ -470,6 +475,7 @@ void Raptor::Run(){
 			PX4_ISFINITE(temp_trajectory_setpoint.yawspeed)
 		){
 			timestamp_last_trajectory_setpoint_set = true;
+			status.timestamp_last_trajectory_setpoint = current_time;
 			timestamp_last_trajectory_setpoint = temp_trajectory_setpoint.timestamp;
 			_trajectory_setpoint = temp_trajectory_setpoint;
 		}
@@ -479,16 +485,22 @@ void Raptor::Run(){
 	if(!angular_velocity_update){
 		status.exit_reason = raptor_status_s::EXIT_REASON_NO_ANGULAR_VELOCITY_UPDATE;
 		if constexpr(PUBLISH_NON_COMPLETE_STATUS){
-			_raptor_status_pub.publish(status);
+			// _raptor_status_pub.publish(status);
 		}
+		updateArmingCheckReply();
 		return;
 	}
 
 	if(!timestamp_last_angular_velocity_set || !timestamp_last_local_position_set || !timestamp_last_attitude_set){
 		status.exit_reason = raptor_status_s::EXIT_REASON_NOT_ALL_OBSERVATIONS_SET;
+		status.vehicle_angular_velocity_stale = !timestamp_last_angular_velocity_set;
+		status.vehicle_local_position_stale = !timestamp_last_local_position_set;
+		status.vehicle_attitude_stale = !timestamp_last_attitude_set;
 		if constexpr(PUBLISH_NON_COMPLETE_STATUS){
 			_raptor_status_pub.publish(status);
 		}
+		can_arm = false;
+		updateArmingCheckReply();
 		return;
 	}
 
@@ -501,7 +513,8 @@ void Raptor::Run(){
 			PX4_ERR("angular velocity timeout");
 			timeout_message_sent = true;
 		}
-		updateArmingCheckReply(false);
+		can_arm = false;
+		updateArmingCheckReply();
 		return;
 	}
 	if((current_time - timestamp_last_local_position) > OBSERVATION_TIMEOUT_LOCAL_POSITION){
@@ -513,7 +526,8 @@ void Raptor::Run(){
 			PX4_ERR("local position timeout");
 			timeout_message_sent = true;
 		}
-		updateArmingCheckReply(false);
+		can_arm = false;
+		updateArmingCheckReply();
 		return;
 	}
 	else{
@@ -535,10 +549,15 @@ void Raptor::Run(){
 			PX4_ERR("attitude timeout");
 			timeout_message_sent = true;
 		}
-		updateArmingCheckReply(false);
+		can_arm = false;
+		updateArmingCheckReply();
 		return;
 	}
 	timeout_message_sent = false;
+
+	// is ready to control at this point
+	can_arm = true;
+	updateArmingCheckReply();
 
 	if(!timestamp_last_trajectory_setpoint_set || (current_time - timestamp_last_trajectory_setpoint) > TRAJECTORY_SETPOINT_TIMEOUT){
 		status.trajectory_setpoint_stale = true;
@@ -564,6 +583,9 @@ void Raptor::Run(){
 	}
 
 
+
+
+
 	rl_tools::inference::applications::l2f::Observation<EXECUTOR_SPEC> observation;
 	rl_tools::inference::applications::l2f::Action<EXECUTOR_SPEC> action;
 	observe(observation);
@@ -573,7 +595,7 @@ void Raptor::Run(){
 	if(executor_status.source != decltype(executor_status.source)::CONTROL){
 		status.exit_reason = raptor_status_s::EXIT_REASON_EXECUTOR_STATUS_SOURCE_NOT_CONTROL;
 		if constexpr(PUBLISH_NON_COMPLETE_STATUS){
-			_raptor_status_pub.publish(status);
+			// _raptor_status_pub.publish(status);
 		}
 		return;
 	}
@@ -591,9 +613,6 @@ void Raptor::Run(){
 
 
 	// no return after this point!
-
-	updateArmingCheckReply(true);
-
 
 	raptor_input_s input_msg;
 	input_msg.active = status.active;

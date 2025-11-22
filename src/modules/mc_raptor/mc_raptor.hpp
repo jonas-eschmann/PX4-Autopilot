@@ -123,6 +123,8 @@ private:
 		CONFIGURED = 2
 	};
 	FlightModeState flightmode_state = FlightModeState::UNREGISTERED;
+	bool can_arm = false;
+	void updateArmingCheckReply();
 
 	// node state
 	vehicle_local_position_s _vehicle_local_position{};
@@ -247,6 +249,5 @@ private:
 		(ParamBool<px4::params::MC_RAPTOR_OFFB>) _param_mc_raptor_offboard
 	)
 
-	void updateArmingCheckReply(bool active);
 
 };
