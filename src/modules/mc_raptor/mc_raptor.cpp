@@ -475,7 +475,7 @@ void Raptor::Run(){
 	if(!angular_velocity_update){
 		status.exit_reason = raptor_status_s::EXIT_REASON_NO_ANGULAR_VELOCITY_UPDATE;
 		if constexpr(PUBLISH_NON_COMPLETE_STATUS){
-			// _raptor_status_pub.publish(status);
+			_raptor_status_pub.publish(status);
 		}
 		updateArmingCheckReply();
 		return;
