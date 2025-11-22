@@ -8,8 +8,6 @@ px4_add_module(
 	MODULE modules__mc_raptor
 	MAIN mc_raptor
 	STACK_MAIN 4000
-	COMPILE_FLAGS
-		-DARM_MATH_LOOPUNROLL
 	SRCS
 		mc_raptor.cpp
 	MODULE_CONFIG
@@ -27,7 +25,7 @@ px4_add_module(
 # )
 
 target_compile_features(modules__mc_raptor PRIVATE cxx_std_17)
-target_compile_options(modules__mc_raptor PRIVATE -Wno-error -DARM_MATH_LOOPUNROLL)
+# target_compile_options(modules__mc_raptor PRIVATE -Wno-error -DARM_MATH_LOOPUNROLL)
 
 
 

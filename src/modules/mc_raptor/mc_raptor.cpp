@@ -110,16 +110,8 @@ bool Raptor::test_policy(FILE *f, TI input_offset, TI output_offset){
 bool Raptor::init()
 {
 	this->init_time = hrt_absolute_time();
-	if (!_vehicle_local_position_sub.registerCallback()) {
-		PX4_ERR("vehicle_local_position_sub callback registration failed");
-		return false;
-	}
 	if (!_vehicle_angular_velocity_sub.registerCallback()) {
 		PX4_ERR("vehicle_angular_velocity_sub callback registration failed");
-		return false;
-	}
-	if (!_vehicle_attitude_sub.registerCallback()) {
-		PX4_ERR("vehicle_attitude_sub callback registration failed");
 		return false;
 	}
 
@@ -382,9 +374,7 @@ void Raptor::updateArmingCheckReply(){
 
 void Raptor::Run(){
 	if (should_exit()) {
-		_vehicle_local_position_sub.unregisterCallback();
 		_vehicle_angular_velocity_sub.unregisterCallback();
-		_vehicle_attitude_sub.unregisterCallback();
 		if(flightmode_state >= FlightModeState::REGISTERED){
 			unregister_ext_component_s unregister_ext_component{};
 			unregister_ext_component.timestamp = hrt_absolute_time();
@@ -441,25 +431,25 @@ void Raptor::Run(){
 	status.subscription_update_angular_velocity = _vehicle_angular_velocity_sub.update(&_vehicle_angular_velocity);
 	if(status.subscription_update_angular_velocity){
 		timestamp_last_angular_velocity = current_time;
-		status.timestamp_last_vehicle_angular_velocity = current_time;
 		timestamp_last_angular_velocity_set = true;
 		angular_velocity_update = true;
 	}
+	status.timestamp_last_vehicle_angular_velocity = timestamp_last_angular_velocity;
 	status.timestamp_sample = _vehicle_angular_velocity.timestamp_sample;
 
 	status.subscription_update_local_position = _vehicle_local_position_sub.update(&_vehicle_local_position);
 	if(status.subscription_update_local_position){
 		timestamp_last_local_position = current_time;
-		status.timestamp_last_vehicle_local_position = current_time;
 		timestamp_last_local_position_set = true;
 	}
+	status.timestamp_last_vehicle_local_position = timestamp_last_local_position;
 
 	status.subscription_update_attitude = _vehicle_attitude_sub.update(&_vehicle_attitude);
 	if(status.subscription_update_attitude){
 		timestamp_last_attitude = current_time;
-		status.timestamp_last_vehicle_attitude = current_time;
 		timestamp_last_attitude_set = true;
 	}
+	status.timestamp_last_vehicle_attitude = timestamp_last_attitude;
 
 	trajectory_setpoint_s temp_trajectory_setpoint;
 	status.subscription_update_trajectory_setpoint = _trajectory_setpoint_sub.update(&temp_trajectory_setpoint);
