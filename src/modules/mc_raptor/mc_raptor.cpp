@@ -12,6 +12,7 @@ Raptor::Raptor(): ModuleParams(nullptr), ScheduledWorkItem(MODULE_NAME, px4::wq_
 	timestamp_last_local_position_set = false;
 	timestamp_last_attitude_set = false;
 	timestamp_last_trajectory_setpoint_set = false;
+	timestamp_last_vehicle_status_set = false;
 	previous_trajectory_setpoint_stale = false;
 	previous_active = false;
 	timeout_message_sent = false;
@@ -226,6 +227,8 @@ bool Raptor::init()
 	PX4_INFO("IMU_GYRO_RATEMAX=%d Hz", (int)imu_gyro_ratemax);
 	PX4_INFO("POLICY_CONTROL_FREQUENCY_TRAINING=%d Hz", (int)POLICY_CONTROL_FREQUENCY_TRAINING);
 	PX4_INFO("Setting force_sync_native = %d Hz / %d Hz = %d", (int)imu_gyro_ratemax, (int)POLICY_CONTROL_FREQUENCY_TRAINING, (int)force_sync_native);
+
+	this->reset();
 
 	return true;
 }
@@ -470,6 +473,11 @@ void Raptor::Run(){
 			_trajectory_setpoint = temp_trajectory_setpoint;
 		}
 	}
+	status.subscription_update_vehicle_status = _vehicle_status_sub.update(&_vehicle_status);
+	if(status.subscription_update_vehicle_status) {
+		timestamp_last_vehicle_status = current_time;
+		timestamp_last_vehicle_status_set = true;
+	}
 
 	constexpr bool PUBLISH_NON_COMPLETE_STATUS = true;
 	if(!angular_velocity_update){
@@ -580,14 +588,24 @@ void Raptor::Run(){
 	rl_tools::inference::applications::l2f::Observation<EXECUTOR_SPEC> observation;
 	rl_tools::inference::applications::l2f::Action<EXECUTOR_SPEC> action;
 	observe(observation);
-	TI nanoseconds = current_time * 1000;
-	// auto executor_status = rl_tools::control(device, executor, nanoseconds, policy, observation, action, rng);
-	rlt::Mode<rlt::nn::layers::gru::NoAutoResetMode<rlt::mode::Evaluation<>>> mode;
-        rlt::inference::applications::l2f::observe(device, executor, observation, executor.input);
-	rl_tools::evaluate_step(device, policy, executor.input, executor.executor.policy_state, executor.output, executor.executor.policy_buffer, rng, mode);
-        for (TI output_i=0; output_i < EXECUTOR_SPEC::OUTPUT_DIM; output_i++){
-            action.action[output_i] = get(device, executor.output, 0, output_i);
-        }
+	hrt_abstime nanoseconds = current_time * 1000;
+	auto executor_status = rl_tools::control(device, executor, nanoseconds, policy, observation, action, rng);
+	if(!executor_status.OK){
+		PX4_ERR("RLtools executor error:");
+		if(executor_status.TIMESTAMP_INVALID){
+			PX4_ERR("    timestamp invalid");
+		}
+		if(executor_status.LAST_CONTROL_TIMESTAMP_GREATER_THAN_LAST_OBSERVATION_TIMESTAMP){
+			PX4_ERR("    last control timestamp %llu greater than last observation timestamp %llu", (unsigned long long)executor.executor.last_control_timestamp, (unsigned long long)executor.executor.last_observation_timestamp);
+		}
+	}
+
+	// rlt::Mode<rlt::nn::layers::gru::NoAutoResetMode<rlt::mode::Evaluation<>>> mode;
+        // rlt::inference::applications::l2f::observe(device, executor, observation, executor.input);
+	// rl_tools::evaluate_step(device, policy, executor.input, executor.executor.policy_state, executor.output, executor.executor.policy_buffer, rng, mode);
+        // for (TI output_i=0; output_i < EXECUTOR_SPEC::OUTPUT_DIM; output_i++){
+        //     action.action[output_i] = get(device, executor.output, 0, output_i);
+        // }
 
 	// if(executor_status.source != decltype(executor_status.source)::CONTROL){
 	// 	status.exit_reason = raptor_status_s::EXIT_REASON_EXECUTOR_STATUS_SOURCE_NOT_CONTROL;
@@ -597,11 +615,7 @@ void Raptor::Run(){
 	// 	return;
 	// }
 
-	status.subscription_update_vehicle_status = _vehicle_status_sub.updated();
-	if(status.subscription_update_vehicle_status) {
-		_vehicle_status_sub.copy(&_vehicle_status);
-	}
-	bool next_active = _vehicle_status.nav_state == ext_component_mode_id;
+	bool next_active = timestamp_last_vehicle_status_set && _vehicle_status.nav_state == ext_component_mode_id;
 	if(!previous_active && next_active){
 		this->reset();
 		PX4_INFO("Resetting Inference Executor (Recurrent State)");

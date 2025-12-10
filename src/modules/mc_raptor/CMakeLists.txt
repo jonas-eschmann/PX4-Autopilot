@@ -7,7 +7,7 @@ include(px4_add_library)
 px4_add_module(
 	MODULE modules__mc_raptor
 	MAIN mc_raptor
-	STACK_MAIN 4000
+	STACK_MAIN 8000
 	SRCS
 		mc_raptor.cpp
 	MODULE_CONFIG
