@@ -591,13 +591,18 @@ void Raptor::Run(){
 	hrt_abstime nanoseconds = current_time * 1000;
 	auto executor_status = rl_tools::control(device, executor, nanoseconds, policy, observation, action, rng);
 	if(!executor_status.OK){
-		PX4_ERR("RLtools executor error:");
 		if(executor_status.TIMESTAMP_INVALID){
-			PX4_ERR("    timestamp invalid");
+			PX4_ERR("RLtools executor error: Timestamp invalid");
 		}
 		if(executor_status.LAST_CONTROL_TIMESTAMP_GREATER_THAN_LAST_OBSERVATION_TIMESTAMP){
-			PX4_ERR("    last control timestamp %llu greater than last observation timestamp %llu", (unsigned long long)executor.executor.last_control_timestamp, (unsigned long long)executor.executor.last_observation_timestamp);
+			PX4_ERR("RLtools executor error: Last control timestamp %llu greater than last observation timestamp %llu", (unsigned long long)executor.executor.last_control_timestamp, (unsigned long long)executor.executor.last_observation_timestamp);
 		}
+		// if(!executor_status.timing_jitter.OK){
+		// 	PX4_ERR("    timing jitter %fx", (double)executor_status.timing_jitter.MAGNITUDE);
+		// }
+		// if(!executor_status.timing_bias.OK){
+		// 	PX4_ERR("    timing bias %fx", (double)executor_status.timing_bias.MAGNITUDE);
+		// }
 	}
 
 	// rlt::Mode<rlt::nn::layers::gru::NoAutoResetMode<rlt::mode::Evaluation<>>> mode;
@@ -607,13 +612,13 @@ void Raptor::Run(){
         //     action.action[output_i] = get(device, executor.output, 0, output_i);
         // }
 
-	// if(executor_status.source != decltype(executor_status.source)::CONTROL){
-	// 	status.exit_reason = raptor_status_s::EXIT_REASON_EXECUTOR_STATUS_SOURCE_NOT_CONTROL;
-	// 	if constexpr(PUBLISH_NON_COMPLETE_STATUS){
-	// 		// _raptor_status_pub.publish(status);
-	// 	}
-	// 	return;
-	// }
+	if(executor_status.source != decltype(executor_status.source)::CONTROL){
+		status.exit_reason = raptor_status_s::EXIT_REASON_EXECUTOR_STATUS_SOURCE_NOT_CONTROL;
+		if constexpr(PUBLISH_NON_COMPLETE_STATUS){
+			// _raptor_status_pub.publish(status);
+		}
+		return;
+	}
 
 	bool next_active = timestamp_last_vehicle_status_set && _vehicle_status.nav_state == ext_component_mode_id;
 	if(!previous_active && next_active){
@@ -679,54 +684,54 @@ void Raptor::Run(){
 	perf_end(_loop_perf);
 	previous_active = next_active;
 
-	// if(executor_status.source == decltype(executor_status.source)::CONTROL){
-	// 	if(executor_status.step_type == decltype(executor_status.step_type)::INTERMEDIATE){
-	// 		this->last_intermediate_status = executor_status;
-	// 		this->last_intermediate_status_set = true;
-	// 	}
-	// 	else if(executor_status.step_type == decltype(executor_status.step_type)::NATIVE){
-	// 		this->last_native_status = executor_status;
-	// 		this->last_native_status_set = true;
-	// 	}
-	// }
+	if(executor_status.source == decltype(executor_status.source)::CONTROL){
+		if(executor_status.step_type == decltype(executor_status.step_type)::INTERMEDIATE){
+			this->last_intermediate_status = executor_status;
+			this->last_intermediate_status_set = true;
+		}
+		else if(executor_status.step_type == decltype(executor_status.step_type)::NATIVE){
+			this->last_native_status = executor_status;
+			this->last_native_status_set = true;
+		}
+	}
 
-	// if(!this->timestamp_last_policy_frequency_check_set || (current_time - timestamp_last_policy_frequency_check) > POLICY_FREQUENCY_CHECK_INTERVAL){
-	// 	if(this->timestamp_last_policy_frequency_check_set){
-	// 		if(last_intermediate_status_set){
-	// 			if(!this->last_intermediate_status.timing_bias.OK || !this->last_intermediate_status.timing_jitter.OK){
-	// 				PX4_WARN("Raptor: INTERMEDIATE: BIAS %fx JITTER %fx", (double)this->last_intermediate_status.timing_bias.MAGNITUDE, (double)this->last_intermediate_status.timing_jitter.MAGNITUDE);
-	// 			}
-	// 			else{
-	// 				if(this->policy_frequency_check_counter % POLICY_FREQUENCY_INFO_INTERVAL == 0){
-	// 					// PX4_INFO("Raptor: INTERMEDIATE: BIAS %fx JITTER %fx", this->last_intermediate_status.timing_bias.MAGNITUDE, this->last_intermediate_status.timing_jitter.MAGNITUDE);
-	// 				}
-	// 			}
-	// 		}
-	// 		if(last_native_status_set){
-	// 			if(!this->last_native_status.timing_bias.OK || !this->last_native_status.timing_jitter.OK){
-	// 				PX4_WARN("Raptor: NATIVE: BIAS %fx JITTER %fx", (double)this->last_native_status.timing_bias.MAGNITUDE, (double)this->last_native_status.timing_jitter.MAGNITUDE);
-	// 			}
-	// 			else{
-	// 				if(this->policy_frequency_check_counter % POLICY_FREQUENCY_INFO_INTERVAL == 0){
-	// 					// PX4_INFO("Raptor: NATIVE: BIAS %fx JITTER %fx", this->last_native_status.timing_bias.MAGNITUDE, this->last_native_status.timing_jitter.MAGNITUDE);
-	// 				}
-	// 			}
-	// 		}
-	// 	}
-	// 	this->num_healthy_executor_statii_intermediate = 0;
-	// 	this->num_non_healthy_executor_statii_intermediate = 0;
-	// 	this->num_healthy_executor_statii_native = 0;
-	// 	this->num_non_healthy_executor_statii_native = 0;
-	// 	this->num_statii = 0;
-	// 	this->timestamp_last_policy_frequency_check = current_time;
-	// 	this->timestamp_last_policy_frequency_check_set = true;
-	// 	this->policy_frequency_check_counter++;
-	// }
-	// this->num_statii++;
-	// this->num_healthy_executor_statii_intermediate += executor_status.OK && executor_status.source == decltype(executor_status.source)::CONTROL && executor_status.step_type == decltype(executor_status.step_type)::INTERMEDIATE;
-	// this->num_non_healthy_executor_statii_intermediate += (!executor_status.OK) && executor_status.source == decltype(executor_status.source)::CONTROL && executor_status.step_type == decltype(executor_status.step_type)::INTERMEDIATE;
-	// this->num_healthy_executor_statii_native += executor_status.OK && executor_status.source == decltype(executor_status.source)::CONTROL && executor_status.step_type == decltype(executor_status.step_type)::NATIVE;
-	// this->num_non_healthy_executor_statii_native += (!executor_status.OK) && executor_status.source == decltype(executor_status.source)::CONTROL && executor_status.step_type == decltype(executor_status.step_type)::NATIVE;
+	if(!this->timestamp_last_policy_frequency_check_set || (current_time - timestamp_last_policy_frequency_check) > POLICY_FREQUENCY_CHECK_INTERVAL){
+		if(this->timestamp_last_policy_frequency_check_set){
+			if(last_intermediate_status_set){
+				if(!this->last_intermediate_status.timing_bias.OK || !this->last_intermediate_status.timing_jitter.OK){
+					PX4_WARN("Raptor: INTERMEDIATE: BIAS %fx JITTER %fx", (double)this->last_intermediate_status.timing_bias.MAGNITUDE, (double)this->last_intermediate_status.timing_jitter.MAGNITUDE);
+				}
+				else{
+					if(this->policy_frequency_check_counter % POLICY_FREQUENCY_INFO_INTERVAL == 0){
+						// PX4_INFO("Raptor: INTERMEDIATE: BIAS %fx JITTER %fx", this->last_intermediate_status.timing_bias.MAGNITUDE, this->last_intermediate_status.timing_jitter.MAGNITUDE);
+					}
+				}
+			}
+			if(last_native_status_set){
+				if(!this->last_native_status.timing_bias.OK || !this->last_native_status.timing_jitter.OK){
+					PX4_WARN("Raptor: NATIVE: BIAS %fx JITTER %fx", (double)this->last_native_status.timing_bias.MAGNITUDE, (double)this->last_native_status.timing_jitter.MAGNITUDE);
+				}
+				else{
+					if(this->policy_frequency_check_counter % POLICY_FREQUENCY_INFO_INTERVAL == 0){
+						// PX4_INFO("Raptor: NATIVE: BIAS %fx JITTER %fx", this->last_native_status.timing_bias.MAGNITUDE, this->last_native_status.timing_jitter.MAGNITUDE);
+					}
+				}
+			}
+		}
+		this->num_healthy_executor_statii_intermediate = 0;
+		this->num_non_healthy_executor_statii_intermediate = 0;
+		this->num_healthy_executor_statii_native = 0;
+		this->num_non_healthy_executor_statii_native = 0;
+		this->num_statii = 0;
+		this->timestamp_last_policy_frequency_check = current_time;
+		this->timestamp_last_policy_frequency_check_set = true;
+		this->policy_frequency_check_counter++;
+	}
+	this->num_statii++;
+	this->num_healthy_executor_statii_intermediate += executor_status.OK && executor_status.source == decltype(executor_status.source)::CONTROL && executor_status.step_type == decltype(executor_status.step_type)::INTERMEDIATE;
+	this->num_non_healthy_executor_statii_intermediate += (!executor_status.OK) && executor_status.source == decltype(executor_status.source)::CONTROL && executor_status.step_type == decltype(executor_status.step_type)::INTERMEDIATE;
+	this->num_healthy_executor_statii_native += executor_status.OK && executor_status.source == decltype(executor_status.source)::CONTROL && executor_status.step_type == decltype(executor_status.step_type)::NATIVE;
+	this->num_non_healthy_executor_statii_native += (!executor_status.OK) && executor_status.source == decltype(executor_status.source)::CONTROL && executor_status.step_type == decltype(executor_status.step_type)::NATIVE;
 }
 
 int Raptor::task_spawn(int argc, char *argv[])

@@ -52,11 +52,20 @@ In QGroundControl:
 ```
 mavproxy.py --master /dev/serial/by-id/usb-Auterion_PX4_FMU_v6C.x_0-if00 --out udp:localhost:14550 --out udp:localhost:13337 --out udp:localhost:13338
 ```
-New terminal:
-```
-./Tools/simulation/jmavsim/jmavsim_run.sh -u -p 13337 -o
-```
 New terminal (optional):
 ```
 ./Tools/mavlink_shell.py udp:localhost:13338
+```
+
+```
+param set SIH_IXX 0.005
+param set SIH_IYY 0.005
+param set SIH_IZZ 0.010
+param set IMU_GYRO_RATEMAX 400
+reboot
+```
+
+New terminal:
+```
+./Tools/simulation/jmavsim/jmavsim_run.sh -u -p 13337 -o
 ```
