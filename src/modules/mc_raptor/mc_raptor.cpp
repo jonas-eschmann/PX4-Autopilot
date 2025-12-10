@@ -552,15 +552,16 @@ void Raptor::Run(){
 	if(!timestamp_last_trajectory_setpoint_set || (current_time - timestamp_last_trajectory_setpoint) > TRAJECTORY_SETPOINT_TIMEOUT){
 		status.trajectory_setpoint_stale = true;
 		if(!previous_trajectory_setpoint_stale){
-			PX4_WARN("trajectory_setpoint turned stale at: %f %f %f", (double)position[0], (double)position[1], (double)position[2]);
 			_trajectory_setpoint.position[0] = position[0];
 			_trajectory_setpoint.position[1] = position[1];
 			_trajectory_setpoint.position[2] = position[2];
-			_trajectory_setpoint.yaw = 0;
+			auto& q = _vehicle_attitude.q;
+			_trajectory_setpoint.yaw = atan2f(2.0f * (q[1] * q[2] + q[0] * q[3]), 1.0f - 2.0f * (q[2] * q[2] + q[3] * q[3]));
 			_trajectory_setpoint.velocity[0] = 0;
 			_trajectory_setpoint.velocity[1] = 0;
 			_trajectory_setpoint.velocity[2] = 0;
 			_trajectory_setpoint.yawspeed = 0;
+			PX4_WARN("trajectory_setpoint turned stale at: %f %f %f, yaw: %f", (double)position[0], (double)position[1], (double)position[2], (double)_trajectory_setpoint.yaw);
 		}
 		previous_trajectory_setpoint_stale = true;
 	}
