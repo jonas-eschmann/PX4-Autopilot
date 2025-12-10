@@ -605,18 +605,12 @@ void Raptor::Run(){
 		// }
 	}
 
-	// rlt::Mode<rlt::nn::layers::gru::NoAutoResetMode<rlt::mode::Evaluation<>>> mode;
-        // rlt::inference::applications::l2f::observe(device, executor, observation, executor.input);
-	// rl_tools::evaluate_step(device, policy, executor.input, executor.executor.policy_state, executor.output, executor.executor.policy_buffer, rng, mode);
-        // for (TI output_i=0; output_i < EXECUTOR_SPEC::OUTPUT_DIM; output_i++){
-        //     action.action[output_i] = get(device, executor.output, 0, output_i);
-        // }
-
 	if(executor_status.source != decltype(executor_status.source)::CONTROL){
-		status.exit_reason = raptor_status_s::EXIT_REASON_EXECUTOR_STATUS_SOURCE_NOT_CONTROL;
-		if constexpr(PUBLISH_NON_COMPLETE_STATUS){
-			// _raptor_status_pub.publish(status);
-		}
+		// status.exit_reason = raptor_status_s::EXIT_REASON_EXECUTOR_STATUS_SOURCE_NOT_CONTROL;
+		// if constexpr(PUBLISH_NON_COMPLETE_STATUS){
+		// 	_raptor_status_pub.publish(status);
+		// }
+		// Exit early if it is not time to control
 		return;
 	}
 
@@ -658,10 +652,8 @@ void Raptor::Run(){
 			T value = action.action[action_i];
 			this->previous_action[action_i] = value;
 			value = (value + 1) / 2;
-			// T scaled_value = value * (SCALE_OUTPUT_WITH_THROTTLE ? (_manual_control_input.throttle + 1)/2 : 0.5);
-			// todo: add simulation check
-			constexpr T training_min = 0; //rl_tools::checkpoint::meta::action_limit_lower;
-			constexpr T training_max = 1.0; //rl_tools::checkpoint::meta::action_limit_upper;
+			constexpr T training_min = 0;
+			constexpr T training_max = 1.0;
 			T scaled_value = (training_max - training_min) * value + training_min;
 			actuator_motors.control[action_i] = scaled_value;
 		}
@@ -702,8 +694,8 @@ void Raptor::Run(){
 					PX4_WARN("Raptor: INTERMEDIATE: BIAS %fx JITTER %fx", (double)this->last_intermediate_status.timing_bias.MAGNITUDE, (double)this->last_intermediate_status.timing_jitter.MAGNITUDE);
 				}
 				else{
-					if(this->policy_frequency_check_counter % POLICY_FREQUENCY_INFO_INTERVAL == 0){
-						// PX4_INFO("Raptor: INTERMEDIATE: BIAS %fx JITTER %fx", this->last_intermediate_status.timing_bias.MAGNITUDE, this->last_intermediate_status.timing_jitter.MAGNITUDE);
+					if(ENABLE_CONTROL_FREQUENCY_INFO && this->policy_frequency_check_counter % POLICY_FREQUENCY_INFO_INTERVAL == 0){
+						PX4_INFO("Raptor: INTERMEDIATE: BIAS %fx JITTER %fx", (double)this->last_intermediate_status.timing_bias.MAGNITUDE, (double)this->last_intermediate_status.timing_jitter.MAGNITUDE);
 					}
 				}
 			}
@@ -712,8 +704,8 @@ void Raptor::Run(){
 					PX4_WARN("Raptor: NATIVE: BIAS %fx JITTER %fx", (double)this->last_native_status.timing_bias.MAGNITUDE, (double)this->last_native_status.timing_jitter.MAGNITUDE);
 				}
 				else{
-					if(this->policy_frequency_check_counter % POLICY_FREQUENCY_INFO_INTERVAL == 0){
-						// PX4_INFO("Raptor: NATIVE: BIAS %fx JITTER %fx", this->last_native_status.timing_bias.MAGNITUDE, this->last_native_status.timing_jitter.MAGNITUDE);
+					if(ENABLE_CONTROL_FREQUENCY_INFO && this->policy_frequency_check_counter % POLICY_FREQUENCY_INFO_INTERVAL == 0){
+						PX4_INFO("Raptor: NATIVE: BIAS %fx JITTER %fx", (double)this->last_native_status.timing_bias.MAGNITUDE, (double)this->last_native_status.timing_jitter.MAGNITUDE);
 					}
 				}
 			}

@@ -62,6 +62,7 @@ param set SIH_IXX 0.005
 param set SIH_IYY 0.005
 param set SIH_IZZ 0.010
 param set IMU_GYRO_RATEMAX 400
+param save
 reboot
 ```
 
