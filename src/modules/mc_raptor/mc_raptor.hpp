@@ -56,6 +56,8 @@
 #include <rl_tools/nn/layers/dense/persist.h>
 #include <rl_tools/nn_models/sequential/persist.h>
 
+#include <rl_tools/dyn/policy_adapter.h>
+
 namespace rlt = rl_tools;
 
 #define MC_RAPTOR_POLICY_NAMESPACE rlt::checkpoint::actor
@@ -213,7 +215,7 @@ private:
 
 		using EXECUTOR_SPEC =
 			rl_tools::inference::applications::l2f::Specification<TYPE_POLICY, TI, TIMESTAMP, ACTION_HISTORY_LENGTH, OUTPUT_DIM, POLICY, CONTROL_INTERVAL_INTERMEDIATE_NS, CONTROL_INTERVAL_NATIVE_NS, FORCE_SYNC_INTERMEDIATE, FORCE_SYNC_NATIVE, FORCE_SYNC_NATIVE_RUNTIME, WARNING_LEVELS, DYNAMIC_ALLOCATION>;
-		using EXECUTOR_STATUS = rlt::inference::executor::Status<EXECUTOR_SPEC::EXECUTOR_SPEC>;
+		using EXECUTOR_STATUS = rlt::inference::executor::Status<EXECUTOR_SPEC::STATUS_SPEC>;
 	};
 	using EXECUTOR_SPEC = EXECUTOR_CONFIG::EXECUTOR_SPEC;
 	rl_tools::inference::applications::L2F<EXECUTOR_SPEC> executor;
@@ -228,11 +230,24 @@ private:
 #ifdef MC_RAPTOR_EMBED_POLICY
 	bool test_policy();
 #else
-	bool test_policy(FILE *f, TI input_offset, TI output_offset);
+	template <typename POLICY_T, typename STATE_T, typename BUFFER_T>
+	bool test_policy(FILE *f, TI input_offset, TI output_offset, POLICY_T &test_policy_ref, STATE_T &state,
+			 BUFFER_T &buffer);
 #endif
 
+	// dyn backend
+	bool use_dyn_backend = false;
+
+	static constexpr TI DYN_INPUT_DIM = 18 + EXECUTOR_CONFIG::OUTPUT_DIM * EXECUTOR_CONFIG::ACTION_HISTORY_LENGTH;
+	using DynPolicy = rlt::dyn::Policy<TI, DYN_INPUT_DIM, EXECUTOR_CONFIG::OUTPUT_DIM>;
+	using DYN_EXECUTOR_SPEC =
+		rlt::inference::applications::l2f::Specification<EXECUTOR_CONFIG::TYPE_POLICY, TI, EXECUTOR_CONFIG::TIMESTAMP, EXECUTOR_CONFIG::ACTION_HISTORY_LENGTH, EXECUTOR_CONFIG::OUTPUT_DIM, DynPolicy, EXECUTOR_CONFIG::CONTROL_INTERVAL_INTERMEDIATE_NS, EXECUTOR_CONFIG::CONTROL_INTERVAL_NATIVE_NS, EXECUTOR_CONFIG::FORCE_SYNC_INTERMEDIATE, EXECUTOR_CONFIG::FORCE_SYNC_NATIVE, EXECUTOR_CONFIG::FORCE_SYNC_NATIVE_RUNTIME, EXECUTOR_CONFIG::WARNING_LEVELS, true, EXECUTOR_SPEC::STATUS_SPEC>;
+	rlt::inference::applications::L2F<DYN_EXECUTOR_SPEC> dyn_executor{};
+	DynPolicy dyn_policy_wrapper{};
+
 	void reset();
-	void observe(rl_tools::inference::applications::l2f::Observation<EXECUTOR_SPEC> &observation);
+	template <typename OBS_SPEC>
+	void observe(rl_tools::inference::applications::l2f::Observation<OBS_SPEC> &observation);
 
 	static constexpr bool REMAP_FROM_CRAZYFLIE =
 		true; // Policy (Crazyflie assignment) => Quadrotor (PX4 Quadrotor X assignment) PX4 SIH assumes the Quadrotor X configuration, which assumes different rotor positions than the crazyflie mapping (from crazyflie outputs to PX4): 1=>1, 2=>4, 3=>2, 4=>3
@@ -278,7 +293,8 @@ private:
 	DEFINE_PARAMETERS(
 		(ParamInt<px4::params::IMU_GYRO_RATEMAX>) _param_imu_gyro_ratemax,
 		(ParamBool<px4::params::MC_RAPTOR_OFFB>) _param_mc_raptor_offboard,
-		(ParamInt<px4::params::MC_RAPTOR_INTREF>) _param_mc_raptor_intref
+		(ParamInt<px4::params::MC_RAPTOR_INTREF>) _param_mc_raptor_intref,
+		(ParamInt<px4::params::MC_RAPTOR_BKEND>) _param_mc_raptor_backend
 	)
 
 

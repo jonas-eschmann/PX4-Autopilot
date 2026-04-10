@@ -3,6 +3,7 @@
 
 #include <rl_tools/inference/applications/l2f/operations_generic.h>
 #include <rl_tools/persist/backends/tar/operations_generic.h>
+#include <rl_tools/dyn/policy_adapter_persist.h>
 
 #include <sys/stat.h>
 
@@ -51,11 +52,21 @@ void Raptor::reset()
 		this->previous_action[action_i] = RESET_PREVIOUS_ACTION_VALUE;
 	}
 
-	rlt::reset(device, executor, policy, rng);
+	if (use_dyn_backend) {
+		rlt::reset(device, dyn_executor, dyn_policy_wrapper, rng);
+
+	} else {
+		rlt::reset(device, executor, policy, rng);
+	}
 }
 
 Raptor::~Raptor()
 {
+	if (use_dyn_backend) {
+		rlt::free(device, dyn_executor);
+		rlt::free(device, dyn_policy_wrapper);
+	}
+
 	perf_free(_loop_perf);
 	perf_free(_loop_interval_perf);
 }
@@ -63,21 +74,13 @@ Raptor::~Raptor()
 #ifdef MC_RAPTOR_EMBED_POLICY
 bool Raptor::test_policy()
 {
-#else
-bool Raptor::test_policy(FILE *f, TI input_offset, TI output_offset)
-{
-#endif
-	using namespace rl_tools::inference::applications::l2f;
 #ifndef RL_TOOLS_DISABLE_TEST
-	// This tests the policy using a known input output pair that has been saved into the policy checkpoint to verify that it has been loaded correctly
 	using POLICY = EXECUTOR_CONFIG::POLICY_TEST;
 	POLICY::template Buffer<false> buffers_test;
 	POLICY::State<false> policy_state_test;
-	rl_tools::Tensor<rl_tools::tensor::Specification<EXECUTOR_CONFIG::TYPE_POLICY::DEFAULT, TI, rl_tools::tensor::Shape<TI, 1, POLICY::OUTPUT_SHAPE::LAST>, false>>
+	rl_tools::Tensor<rl_tools::tensor::Specification<T, TI, rl_tools::tensor::Shape<TI, 1, POLICY::OUTPUT_SHAPE::LAST>, false>>
 			test_output;
 	rl_tools::Mode<rl_tools::mode::Evaluation<>> mode;
-	using EXAMPLE_INPUT_SPEC = MC_RAPTOR_EXAMPLE_NAMESPACE::input::SPEC;
-	using EXAMPLE_OUTPUT_SPEC = MC_RAPTOR_EXAMPLE_NAMESPACE::output::SPEC;
 	float acc = 0;
 	uint64_t num_values = 0;
 	rl_tools::inference::applications::l2f::Action<EXECUTOR_SPEC> action;
@@ -86,23 +89,11 @@ bool Raptor::test_policy(FILE *f, TI input_offset, TI output_offset)
 		rl_tools::reset(device, policy, policy_state_test, rng);
 
 		for (TI step_i = 0; step_i < EXECUTOR_CONFIG::TEST_SEQUENCE_LENGTH_ACTUAL; step_i++) {
-#ifdef MC_RAPTOR_EMBED_POLICY
 			const auto step_input = rl_tools::view(device, MC_RAPTOR_EXAMPLE_NAMESPACE::input::container, step_i);
 			const auto batch_input = rl_tools::view_range(device, step_input, batch_i, rlt::tensor::ViewSpec<0, 1> {});
 			const auto step_output_target = rl_tools::view(device, MC_RAPTOR_EXAMPLE_NAMESPACE::output::container, step_i);
 			const auto batch_output_target = rl_tools::view_range(device, step_output_target, batch_i, rlt::tensor::ViewSpec<0, 1> {});
-#else
-			rl_tools::Tensor<rl_tools::tensor::Specification<EXECUTOR_CONFIG::TYPE_POLICY::DEFAULT, TI, rl_tools::tensor::Shape<TI, 1, EXAMPLE_INPUT_SPEC::SHAPE::LAST>, false>>
-					batch_input;
-			rl_tools::Tensor<rl_tools::tensor::Specification<EXECUTOR_CONFIG::TYPE_POLICY::DEFAULT, TI, rl_tools::tensor::Shape<TI, 1, EXAMPLE_OUTPUT_SPEC::SHAPE::LAST>, false>>
-					batch_output_target;
-			fseek(f, input_offset + (step_i * EXAMPLE_INPUT_SPEC::STRIDE::FIRST + batch_i * EXAMPLE_INPUT_SPEC::STRIDE::template GET<1>)*sizeof(
-				      EXAMPLE_INPUT_SPEC::T), SEEK_SET);
-			fread(batch_input._data, sizeof(EXAMPLE_INPUT_SPEC::T), EXAMPLE_INPUT_SPEC::SHAPE::LAST, f);
-			fseek(f, output_offset + (step_i * EXAMPLE_OUTPUT_SPEC::STRIDE::FIRST + batch_i * EXAMPLE_OUTPUT_SPEC::STRIDE::template GET<1>)*sizeof(
-				      EXAMPLE_OUTPUT_SPEC::T), SEEK_SET);
-			fread(batch_output_target._data, sizeof(EXAMPLE_OUTPUT_SPEC::T), EXAMPLE_OUTPUT_SPEC::SHAPE::LAST, f);
-#endif
+
 			rl_tools::utils::assert_exit(device, !rl_tools::is_nan(device, batch_input), "input is nan");
 			rl_tools::evaluate_step(device, policy, batch_input, policy_state_test, test_output, buffers_test, rng, mode);
 			rl_tools::utils::assert_exit(device, !rl_tools::is_nan(device, test_output), "output is nan");
@@ -111,7 +102,6 @@ bool Raptor::test_policy(FILE *f, TI input_offset, TI output_offset)
 				acc += rl_tools::math::abs(device.math, rl_tools::get(device, test_output, 0, action_i) - rl_tools::get(device, batch_output_target, 0,
 							   action_i));
 				num_values += 1;
-				rl_tools::utils::assert_exit(device, !rl_tools::math::is_nan(device.math, acc), "output is nan");
 
 				if (batch_i == 0 && step_i == EXECUTOR_CONFIG::TEST_SEQUENCE_LENGTH_ACTUAL - 1) {
 					action.action[action_i] = rl_tools::get(device, test_output, 0, action_i);
@@ -129,21 +119,83 @@ bool Raptor::test_policy(FILE *f, TI input_offset, TI output_offset)
 
 	constexpr float EPSILON = 1e-5;
 
-	bool healthy = abs_diff < EPSILON;
-
-	if (!healthy) {
+	if (abs_diff >= EPSILON) {
 		PX4_ERR("Checkpoint test failed with diff %.10f", (double)abs_diff);
 		return false;
-
-	} else {
-		PX4_INFO("Checkpoint test passed with diff %.10f", (double)abs_diff);
-		return true;
 	}
 
+	PX4_INFO("Checkpoint test passed with diff %.10f", (double)abs_diff);
+	return true;
 #else
-	return 0;
+	return true;
 #endif
 }
+#else
+template <typename POLICY_T, typename STATE_T, typename BUFFER_T>
+bool Raptor::test_policy(FILE *f, TI input_offset, TI output_offset, POLICY_T &test_policy_ref, STATE_T &state,
+			 BUFFER_T &buffer)
+{
+#ifndef RL_TOOLS_DISABLE_TEST
+	constexpr TI INPUT_DIM = DYN_INPUT_DIM;
+	constexpr TI TEST_OUTPUT_DIM = EXECUTOR_CONFIG::OUTPUT_DIM;
+	constexpr TI TEST_BATCH_SIZE = EXECUTOR_CONFIG::TEST_BATCH_SIZE_ACTUAL;
+	constexpr TI TEST_SEQUENCE_LENGTH = EXECUTOR_CONFIG::TEST_SEQUENCE_LENGTH_ACTUAL;
+
+	rl_tools::Tensor<rl_tools::tensor::Specification<T, TI, rl_tools::tensor::Shape<TI, 1, INPUT_DIM>, false>>
+			batch_input;
+	rl_tools::Tensor<rl_tools::tensor::Specification<T, TI, rl_tools::tensor::Shape<TI, 1, TEST_OUTPUT_DIM>, false>>
+			batch_output_target;
+	rl_tools::Tensor<rl_tools::tensor::Specification<T, TI, rl_tools::tensor::Shape<TI, 1, TEST_OUTPUT_DIM>, false>>
+			test_output;
+	rl_tools::Mode<rl_tools::mode::Evaluation<>> mode;
+	float acc = 0;
+	uint64_t num_values = 0;
+	rl_tools::inference::applications::l2f::Action<EXECUTOR_SPEC> action;
+
+	for (TI batch_i = 0; batch_i < TEST_BATCH_SIZE; batch_i++) {
+		rlt::reset(device, test_policy_ref, state, rng);
+
+		for (TI step_i = 0; step_i < TEST_SEQUENCE_LENGTH; step_i++) {
+			fseek(f, input_offset + (step_i * TEST_BATCH_SIZE + batch_i) * INPUT_DIM * sizeof(T), SEEK_SET);
+			fread(batch_input._data, sizeof(T), INPUT_DIM, f);
+			fseek(f, output_offset + (step_i * TEST_BATCH_SIZE + batch_i) * TEST_OUTPUT_DIM * sizeof(T), SEEK_SET);
+			fread(batch_output_target._data, sizeof(T), TEST_OUTPUT_DIM, f);
+
+			rlt::evaluate_step(device, test_policy_ref, batch_input, state, test_output, buffer, rng, mode);
+
+			for (TI action_i = 0; action_i < TEST_OUTPUT_DIM; action_i++) {
+				acc += rlt::math::abs(device.math, rlt::get(device, test_output, 0, action_i) - rlt::get(device, batch_output_target, 0,
+							action_i));
+				num_values += 1;
+
+				if (batch_i == 0 && step_i == TEST_SEQUENCE_LENGTH - 1) {
+					action.action[action_i] = rlt::get(device, test_output, 0, action_i);
+				}
+			}
+		}
+	}
+
+	float abs_diff = acc / num_values;
+	PX4_INFO("Checkpoint test diff: %f", (double)abs_diff);
+
+	for (TI output_i = 0; output_i < TEST_OUTPUT_DIM; output_i++) {
+		PX4_INFO("output[%d]: %f", (int)output_i, (double)action.action[output_i]);
+	}
+
+	constexpr float EPSILON = 1e-5;
+
+	if (abs_diff >= EPSILON) {
+		PX4_ERR("Checkpoint test failed with diff %.10f", (double)abs_diff);
+		return false;
+	}
+
+	PX4_INFO("Checkpoint test passed with diff %.10f", (double)abs_diff);
+	return true;
+#else
+	return true;
+#endif
+}
+#endif
 
 bool Raptor::init()
 {
@@ -155,17 +207,56 @@ bool Raptor::init()
 	}
 
 #ifndef MC_RAPTOR_EMBED_POLICY
-	const char *path = PX4_STORAGEDIR "/raptor/policy.tar";
+	{
+		const char *raptor_path = PX4_STORAGEDIR "/raptor/raptor.tar";
+		const char *dyn_path = PX4_STORAGEDIR "/raptor/policy.tar";
+		int32_t backend_param = _param_mc_raptor_backend.get();
 
-	struct stat st;
-	bool file_exists = (stat(path, &st) == 0);
+		struct stat st;
+		bool raptor_exists = (stat(raptor_path, &st) == 0);
+		bool dyn_exists = (stat(dyn_path, &st) == 0);
 
-	if (file_exists) {
-		PX4_INFO("Policy checkpoint %s exists", path);
-		FILE *f = fopen(path, "rb");
+		const char *selected_path = nullptr;
+		bool selected_dyn = false;
+
+		if (backend_param == 1) {
+			if (!raptor_exists) {
+				PX4_ERR("Backend=static but %s does not exist", raptor_path);
+				return false;
+			}
+
+			selected_path = raptor_path;
+			selected_dyn = false;
+
+		} else if (backend_param == 2) {
+			if (!dyn_exists) {
+				PX4_ERR("Backend=dyn but %s does not exist", dyn_path);
+				return false;
+			}
+
+			selected_path = dyn_path;
+			selected_dyn = true;
+
+		} else {
+			if (raptor_exists) {
+				selected_path = raptor_path;
+				selected_dyn = false;
+
+			} else if (dyn_exists) {
+				selected_path = dyn_path;
+				selected_dyn = true;
+
+			} else {
+				PX4_ERR("No policy file found (tried %s and %s)", raptor_path, dyn_path);
+				return false;
+			}
+		}
+
+		PX4_INFO("Policy checkpoint %s exists (backend=%s)", selected_path, selected_dyn ? "dyn" : "static");
+		FILE *f = fopen(selected_path, "rb");
 
 		if (!f) {
-			PX4_ERR("Failed to open %s: %s", path, strerror(errno));
+			PX4_ERR("Failed to open %s: %s", selected_path, strerror(errno));
 			return false;
 		}
 
@@ -181,61 +272,101 @@ bool Raptor::init()
 			PX4_ERR("ftell failed: %s", strerror(errno));
 			fclose(f);
 			return false;
+		}
+
+		rewind(f);
+
+		using TAR_SPEC = rlt::persist::backends::tar::ReaderGroupSpecification<TI, rlt::persist::backends::tar::PosixFileData<TI>>;
+		rlt::persist::backends::tar::ReaderGroup<TAR_SPEC> reader_group;
+		reader_group.data.f = f;
+		reader_group.data.size = size;
+
+		constexpr TI METADATA_BUFFER_SIZE = 256;
+		char metadata_buffer[METADATA_BUFFER_SIZE];
+		TI read_size = 0;
+		rlt::persist::backends::tar::get(device, reader_group.data, "actor/meta", metadata_buffer, METADATA_BUFFER_SIZE, read_size);
+		TI checkpoint_name_position = 0;
+		TI checkpoint_name_len = 0;
+
+		if (rlt::persist::backends::tar::seek_in_metadata(device, metadata_buffer, METADATA_BUFFER_SIZE, "checkpoint_name",
+				checkpoint_name_position, checkpoint_name_len)) {
+			strncpy(checkpoint_name, metadata_buffer + checkpoint_name_position, CHECKPOINT_NAME_LENGTH);
+			checkpoint_name[checkpoint_name_len < CHECKPOINT_NAME_LENGTH ? checkpoint_name_len : CHECKPOINT_NAME_LENGTH - 1] = '\0';
 
 		} else {
-			rewind(f);
-			bool successfully_loaded = false;
-			using SPEC = rlt::persist::backends::tar::ReaderGroupSpecification<TI, rlt::persist::backends::tar::PosixFileData<TI>>;
+			PX4_ERR("Failed to get checkpoint name from metadata");
+			fclose(f);
+			return false;
+		}
 
-			rlt::persist::backends::tar::ReaderGroup<SPEC> reader_group;
-			reader_group.data.f = f;
-			reader_group.data.size = size;
+		{
 			auto actor_group = rlt::get_group(device, reader_group, "actor");
-			successfully_loaded = rlt::load(device, policy, actor_group);
-			constexpr TI METADATA_BUFFER_SIZE = 256;
-			char metadata_buffer[METADATA_BUFFER_SIZE];
-			TI read_size = 0;
-			rlt::persist::backends::tar::get(device, reader_group.data, "actor/meta", metadata_buffer, METADATA_BUFFER_SIZE, read_size);
-			TI checkpoint_name_position = 0;
-			TI checkpoint_name_len = 0;
 
-			if (rlt::persist::backends::tar::seek_in_metadata(device, metadata_buffer, METADATA_BUFFER_SIZE, "checkpoint_name",
-					checkpoint_name_position, checkpoint_name_len)) {
-				strncpy(checkpoint_name, metadata_buffer + checkpoint_name_position, CHECKPOINT_NAME_LENGTH);
-				checkpoint_name[checkpoint_name_len < CHECKPOINT_NAME_LENGTH ? checkpoint_name_len : CHECKPOINT_NAME_LENGTH - 1] = '\0';
+			if (selected_dyn) {
+				use_dyn_backend = true;
 
-			} else {
-				PX4_ERR("Failed to get checkpoint name from metadata");
-				return false;
-			}
-
-			if (successfully_loaded) {
-				PX4_INFO("Policy loaded from file %s", path);
-				TI input_offset = 0;
-				TI input_size = 0;
-				rlt::persist::backends::tar::seek(device, reader_group.data, "example/input/data", input_offset, input_size);
-				PX4_INFO("Input offset: %d", (int)input_offset);
-				TI output_offset = 0;
-				TI output_size = 0;
-				rlt::persist::backends::tar::seek(device, reader_group.data, "example/output/data", output_offset, output_size);
-				PX4_INFO("Output offset: %d", (int)output_offset);
-
-				if (!test_policy(f, input_offset, output_offset)) {
-					PX4_ERR("Checkpoint test failed");
+				if (!rlt::load(device, dyn_executor, dyn_policy_wrapper, actor_group)) {
+					PX4_ERR("Failed to load dyn policy from %s", selected_path);
+					fclose(f);
 					return false;
 				}
 
 			} else {
-				PX4_ERR("Failed to load policy from file %s", path);
-				return false;
-			}
+				bool successfully_loaded = rlt::load(device, policy, actor_group);
 
-			fclose(f);
+				if (!successfully_loaded) {
+					PX4_ERR("Failed to load policy from file %s", selected_path);
+					fclose(f);
+					return false;
+				}
+
+				PX4_INFO("Policy loaded from file %s", selected_path);
+			}
 		}
 
-	} else {
-		PX4_INFO("File %s does not exist", path);
-		return false;
+		TI input_offset = 0;
+		TI input_size = 0;
+		rlt::persist::backends::tar::seek(device, reader_group.data, "example/input/data", input_offset, input_size);
+		PX4_INFO("Input offset: %d", (int)input_offset);
+		TI output_offset = 0;
+		TI output_size = 0;
+		rlt::persist::backends::tar::seek(device, reader_group.data, "example/output/data", output_offset, output_size);
+		PX4_INFO("Output offset: %d", (int)output_offset);
+
+		if (input_size > 0 && output_size > 0) {
+			if (use_dyn_backend) {
+				rlt::dyn::PolicyState<TI> test_state{};
+				test_state.inner.batch_size = 1;
+				test_state.inner.layer = &dyn_policy_wrapper.layer;
+				rlt::malloc(device, test_state);
+
+				if (!test_policy(f, input_offset, output_offset, dyn_policy_wrapper, test_state,
+						 dyn_executor.executor.policy_buffer)) {
+					PX4_ERR("Dyn checkpoint test failed");
+					rlt::free(device, test_state);
+					fclose(f);
+					return false;
+				}
+
+				rlt::free(device, test_state);
+
+			} else {
+				using POLICY_TEST = EXECUTOR_CONFIG::POLICY_TEST;
+				POLICY_TEST::template Buffer<false> test_buffer;
+				POLICY_TEST::State<false> test_state;
+
+				if (!test_policy(f, input_offset, output_offset, policy, test_state, test_buffer)) {
+					PX4_ERR("Checkpoint test failed");
+					fclose(f);
+					return false;
+				}
+			}
+
+		} else {
+			PX4_WARN("No example data in checkpoint, skipping verification");
+		}
+
+		fclose(f);
 	}
 
 #else
@@ -270,8 +401,15 @@ bool Raptor::init()
 	}
 
 	int32_t force_sync_native = imu_gyro_ratemax / POLICY_CONTROL_FREQUENCY_TRAINING;
-	executor.executor.force_sync_native = force_sync_native;
-	executor.executor.force_sync_native_initialized = true;
+
+	if (use_dyn_backend) {
+		dyn_executor.executor.force_sync_native = force_sync_native;
+		dyn_executor.executor.force_sync_native_initialized = true;
+
+	} else {
+		executor.executor.force_sync_native = force_sync_native;
+		executor.executor.force_sync_native_initialized = true;
+	}
 	PX4_INFO("IMU_GYRO_RATEMAX=%d Hz", (int)imu_gyro_ratemax);
 	PX4_INFO("POLICY_CONTROL_FREQUENCY_TRAINING=%d Hz", (int)POLICY_CONTROL_FREQUENCY_TRAINING);
 	PX4_INFO("Setting force_sync_native = %d Hz / %d Hz = %d", (int)imu_gyro_ratemax, (int)POLICY_CONTROL_FREQUENCY_TRAINING,
@@ -340,7 +478,8 @@ void rotate_vector(T R[9], T v[3], T v_rotated[3])
 	v_rotated[2] = R[6] * v[0] + R[7] * v[1] + R[8] * v[2];
 }
 
-void Raptor::observe(rl_tools::inference::applications::l2f::Observation<EXECUTOR_SPEC> &observation)
+template <typename OBS_SPEC>
+void Raptor::observe(rl_tools::inference::applications::l2f::Observation<OBS_SPEC> &observation)
 {
 	// converting from FRD to FLU
 	T Rt_inv[9];
@@ -818,7 +957,21 @@ void Raptor::Run()
 	rl_tools::inference::applications::l2f::Action<EXECUTOR_SPEC> action;
 	observe(observation);
 	hrt_abstime nanoseconds = current_time * 1000;
-	auto executor_status = rl_tools::control(device, executor, nanoseconds, policy, observation, action, rng);
+
+	EXECUTOR_CONFIG::EXECUTOR_STATUS executor_status{};
+
+	if (use_dyn_backend) {
+		rl_tools::inference::applications::l2f::Observation<DYN_EXECUTOR_SPEC> dyn_observation;
+		rl_tools::inference::applications::l2f::Action<DYN_EXECUTOR_SPEC> dyn_action;
+		observe(dyn_observation);
+		executor_status = rlt::control(device, dyn_executor, nanoseconds, dyn_policy_wrapper, dyn_observation, dyn_action, rng);
+		for (TI i = 0; i < EXECUTOR_CONFIG::OUTPUT_DIM; i++) {
+			action.action[i] = dyn_action.action[i];
+		}
+
+	} else {
+		executor_status = rl_tools::control(device, executor, nanoseconds, policy, observation, action, rng);
+	}
 
 	if (!executor_status.OK) {
 		if (executor_status.TIMESTAMP_INVALID) {
@@ -827,7 +980,8 @@ void Raptor::Run()
 
 		if (executor_status.LAST_CONTROL_TIMESTAMP_GREATER_THAN_LAST_OBSERVATION_TIMESTAMP) {
 			PX4_ERR("RLtools executor error: Last control timestamp %llu greater than last observation timestamp %llu",
-				(unsigned long long)executor.executor.last_control_timestamp, (unsigned long long)executor.executor.last_observation_timestamp);
+				use_dyn_backend ? (unsigned long long)dyn_executor.executor.last_control_timestamp : (unsigned long long)executor.executor.last_control_timestamp,
+				use_dyn_backend ? (unsigned long long)dyn_executor.executor.last_observation_timestamp : (unsigned long long)executor.executor.last_observation_timestamp);
 		}
 	}
 

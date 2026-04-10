@@ -29,6 +29,22 @@ parameters:
             default: false
             category: System
 
+        MC_RAPTOR_BKEND:
+            description:
+                short: Inference backend selection
+                long: |
+                    Selects which inference backend to use.
+                    Auto: prefer raptor.tar (static), fall back to policy.tar (dyn).
+                    Static: fixed-architecture from raptor.tar only.
+                    Dyn: dynamic model from policy.tar only.
+            type: enum
+            values:
+                0: Auto
+                1: Static
+                2: Dyn
+            default: 0
+            category: System
+
         MC_RAPTOR_INTREF:
             description:
                 short: Use internal reference instead of trajectory_setpoint
