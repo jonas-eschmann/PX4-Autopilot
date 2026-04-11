@@ -2,6 +2,7 @@
 #undef OK
 
 #include <rl_tools/inference/applications/l2f/operations_generic.h>
+#include <rl_tools/inference/applications/l2f/operations_dyn.h>
 #include <rl_tools/persist/backends/tar/operations_generic.h>
 #include <rl_tools/dyn/policy_adapter_persist.h>
 
@@ -281,7 +282,7 @@ bool Raptor::init()
 		reader_group.data.f = f;
 		reader_group.data.size = size;
 
-		constexpr TI METADATA_BUFFER_SIZE = 256;
+		constexpr TI METADATA_BUFFER_SIZE = 512;
 		char metadata_buffer[METADATA_BUFFER_SIZE];
 		TI read_size = 0;
 		rlt::persist::backends::tar::get(device, reader_group.data, "actor/meta", metadata_buffer, METADATA_BUFFER_SIZE, read_size);
@@ -309,6 +310,41 @@ bool Raptor::init()
 					PX4_ERR("Failed to load dyn policy from %s", selected_path);
 					fclose(f);
 					return false;
+				}
+
+				TI meta_position = 0;
+				TI meta_len = 0;
+
+				if (rlt::persist::backends::tar::seek_in_metadata(device, metadata_buffer, METADATA_BUFFER_SIZE,
+						"meta", meta_position, meta_len)) {
+					constexpr TI OBS_BUF_SIZE = 256;
+					char obs_buf[OBS_BUF_SIZE];
+					TI obs_len = 0;
+
+					if (rlt::inference::applications::l2f::extract_observation_from_meta(
+							metadata_buffer + meta_position, meta_len, obs_buf, OBS_BUF_SIZE, obs_len)) {
+						PX4_INFO("Observation description: %s", obs_buf);
+
+						if (!rlt::inference::applications::l2f::parse_observation_string(
+								device, obs_buf, obs_len, dyn_executor.observation_layout,
+								EXECUTOR_CONFIG::OUTPUT_DIM)) {
+							PX4_ERR("Failed to parse observation description");
+							fclose(f);
+							return false;
+						}
+
+						if (!rlt::inference::applications::l2f::validate_observation_layout(
+								device, dyn_executor.observation_layout,
+								(TI)EXECUTOR_CONFIG::ACTION_HISTORY_LENGTH)) {
+							PX4_ERR("Observation layout validation failed");
+							fclose(f);
+							return false;
+						}
+
+						PX4_INFO("Observation layout: %d components, total_dim=%d",
+							 (int)dyn_executor.observation_layout.component_count,
+							 (int)dyn_executor.observation_layout.total_dim);
+					}
 				}
 
 			} else {
@@ -514,6 +550,7 @@ void Raptor::observe(rl_tools::inference::applications::l2f::Observation<OBS_SPE
 		observation.orientation[1] = qd[1];
 		observation.orientation[2] = qd[2];
 		observation.orientation[3] = qd[3];
+		observation.orientation_set = true;
 	}
 
 	{
@@ -526,6 +563,7 @@ void Raptor::observe(rl_tools::inference::applications::l2f::Observation<OBS_SPE
 		observation.position[0] = clip(pt[0], max_position_error, -max_position_error);
 		observation.position[1] = clip(pt[1], max_position_error, -max_position_error);
 		observation.position[2] = clip(pt[2], max_position_error, -max_position_error);
+		observation.position_set = true;
 	}
 	{
 		// Linear Velocity
@@ -537,17 +575,20 @@ void Raptor::observe(rl_tools::inference::applications::l2f::Observation<OBS_SPE
 		observation.linear_velocity[0] = clip(vt[0], max_velocity_error, -max_velocity_error);
 		observation.linear_velocity[1] = clip(vt[1], max_velocity_error, -max_velocity_error);
 		observation.linear_velocity[2] = clip(vt[2], max_velocity_error, -max_velocity_error);
+		observation.linear_velocity_set = true;
 	}
 	{
 		// Angular Velocity
 		observation.angular_velocity[0] = +_vehicle_angular_velocity.xyz[0];
 		observation.angular_velocity[1] = -_vehicle_angular_velocity.xyz[1];
 		observation.angular_velocity[2] = -_vehicle_angular_velocity.xyz[2];
+		observation.angular_velocity_set = true;
 	}
 
 	for (TI action_i = 0; action_i < EXECUTOR_CONFIG::OUTPUT_DIM; action_i++) {
 		observation.previous_action[action_i] = this->previous_action[action_i];
 	}
+	observation.previous_action_set = true;
 }
 
 
